@@ -1,0 +1,548 @@
+// prisma/schema.prisma
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Account {
+  id                String  @id @default(uuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model User {
+  id            String    @id @default(uuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+  password      String?
+  sessionVersion Int      @default(0)
+  boostCredits  Int       @default(0)
+  locale        String    @default("en")
+
+  notifyTurns        Boolean @default(true)
+  notifyReminders    Boolean @default(true)
+  notifyPosts        Boolean @default(true)
+  notifyInteractions Boolean @default(true)
+  notifySocial       Boolean @default(true)
+  notifyRecaps       Boolean @default(true)
+
+  bio      String? @default("Vlogging our days, making our memories ✨")
+  handle   String? @unique
+  location String? @default("Phuket, Thailand")
+
+  createdAt DateTime @default(now())
+
+  accounts Account[]
+  sessions Session[]
+
+  groupMembers         GroupMember[]
+  dailyAssignments     DailyAssignment[]
+  clips                Clip[]
+  reactions            Reaction[]
+  photoResponses       PhotoResponse[]
+  pushSubscriptions    PushSubscription[]
+  comments             Comment[]
+  views                View[]
+  unlockedAchievements UnlockedAchievement[]
+  pokes                Poke[]
+  volunteers           Volunteer[]
+  groupBoosts          GroupBoost[]
+  activeUploads        ActiveUpload[]
+  boostPurchases       BoostPurchase[]
+  mediaUploadGrants    MediaUploadGrant[]
+  agreementAcceptances AgreementAcceptance[]
+  feedbackReports      FeedbackReport[]
+
+  friendRequestsSent     Friendship[] @relation("FriendRequestsSent")
+  friendRequestsReceived Friendship[] @relation("FriendRequestsReceived")
+
+  @@map("users")
+}
+
+model AgreementAcceptance {
+  id                   String   @id @default(uuid())
+  userId               String
+  agreementSlug        String
+  agreementVersion     String
+  agreementEffectiveAt DateTime
+  titleSnapshot        String
+  contentSnapshot      String   @db.Text
+  contentHash          String
+  acceptedAt           DateTime @default(now())
+  ipAddress            String?
+  userAgent            String?  @db.Text
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, agreementSlug, agreementVersion])
+  @@index([userId, acceptedAt])
+  @@map("agreement_acceptances")
+}
+
+model FeedbackReport {
+  id                 String   @id @default(uuid())
+  userId             String
+  category           String
+  message            String   @db.Text
+  screen             String?
+  appVersion         String?
+  screenshotPath     String?
+  logs               String?  @db.Text
+  deviceInfo         String?  @db.Text
+  includedScreenshot Boolean  @default(false)
+  includedLogs       Boolean  @default(false)
+  includedDeviceInfo Boolean  @default(false)
+  status             String   @default("open")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@map("feedback_reports")
+}
+
+model BackendIncident {
+  id           String   @id
+  requestId    String?
+  jobRunId     String?
+  level        String
+  event        String
+  code         String?
+  route        String?
+  method       String?
+  status       Int?
+  userId       String?
+  groupId      String?
+  clipId       String?
+  errorType    String?
+  errorMessage String?  @db.Text
+  stack        String?  @db.Text
+  context      Json?
+  environment  String
+  release      String
+  createdAt    DateTime @default(now())
+  expiresAt    DateTime
+
+  @@index([requestId])
+  @@index([jobRunId])
+  @@index([level, createdAt])
+  @@index([event, createdAt])
+  @@index([expiresAt])
+  @@map("backend_incidents")
+}
+
+model VerificationToken {
+  id         String   @id @default(uuid())
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+model Group {
+  id         String   @id @default(uuid())
+  name       String
+  inviteCode String   @unique
+  timezone   String   @default("UTC")
+  image      String? // Replaced emoji with image
+  createdAt  DateTime @default(now())
+
+  xp    Int @default(0)
+  level Int @default(1)
+
+  boostGracePeriodEndsAt DateTime?
+  isFrozen               Boolean   @default(false)
+
+  members          GroupMember[]
+  dailyAssignments DailyAssignment[]
+  clips            Clip[]
+  volunteers       Volunteer[]
+  boosts           GroupBoost[]
+  activeUploads    ActiveUpload[]
+  xpEvents         GroupMemberXpEvent[]
+
+  @@map("groups")
+}
+
+model GroupBoost {
+  id        String   @id @default(uuid())
+  groupId   String
+  userId    String
+  createdAt DateTime @default(now())
+
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, userId])
+  @@index([groupId])
+  @@index([userId])
+  @@map("group_boosts")
+}
+
+model GroupMember {
+  id       String   @id @default(uuid())
+  groupId  String
+  userId   String
+  role     String   @default("member")
+  streak   Int      @default(0)
+  joinedAt DateTime @default(now())
+
+  xp           Int      @default(0)
+  lastActiveAt DateTime @default(now())
+
+  group    Group                @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user     User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  xpEvents GroupMemberXpEvent[]
+
+  @@unique([groupId, userId])
+  @@index([groupId])
+  @@index([userId])
+  @@map("group_members")
+}
+
+model Prompt {
+  id        String   @id @default(uuid())
+  text      String   @unique
+  createdAt DateTime @default(now())
+
+  @@map("prompts")
+}
+
+model GroupMemberXpEvent {
+  id            String   @id @default(uuid())
+  groupId       String
+  groupMemberId String
+  businessDate  DateTime @db.Date
+  reason        String
+  amount        Int
+  createdAt     DateTime @default(now())
+
+  group  Group       @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  member GroupMember @relation(fields: [groupMemberId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, groupMemberId, businessDate, reason])
+  @@index([groupMemberId, businessDate])
+  @@map("group_member_xp_events")
+}
+
+model DailyAssignment {
+  id            String   @id @default(uuid())
+  groupId       String
+  userId        String
+  date          DateTime @db.Date
+  status        String   @default("active")
+  isVolunteer   Boolean  @default(false)
+  recapNotified Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  activePrompt String?
+  promptSkips  Int     @default(0)
+
+  isPassed       Boolean @default(false)
+  passedByUserId String?
+  isClaimed      Boolean @default(false)
+  isMandatory    Boolean @default(false)
+
+  group Group  @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clips Clip[]
+  pokes Poke[]
+
+  @@unique([groupId, date])
+  @@index([groupId])
+  @@index([userId])
+  @@index([date])
+  @@map("daily_assignments")
+}
+
+model Volunteer {
+  id         String   @id @default(uuid())
+  groupId    String
+  userId     String
+  targetDate DateTime @db.Date
+  createdAt  DateTime @default(now())
+
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, userId, targetDate])
+  @@index([groupId])
+  @@index([userId])
+  @@index([targetDate])
+  @@map("volunteers")
+}
+
+model Poke {
+  id           String   @id @default(uuid())
+  assignmentId String
+  pokerId      String
+  createdAt    DateTime @default(now())
+
+  assignment DailyAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  poker      User            @relation(fields: [pokerId], references: [id], onDelete: Cascade)
+
+  @@index([assignmentId])
+  @@index([pokerId])
+  @@map("pokes")
+}
+
+model Friendship {
+  id          String   @id @default(uuid())
+  requesterId String
+  addresseeId String
+  status      String   @default("pending")
+  createdAt   DateTime @default(now())
+
+  requester User @relation("FriendRequestsSent", fields: [requesterId], references: [id], onDelete: Cascade)
+  addressee User @relation("FriendRequestsReceived", fields: [addresseeId], references: [id], onDelete: Cascade)
+
+  @@unique([requesterId, addresseeId])
+  @@index([requesterId])
+  @@index([addresseeId])
+  @@map("friendships")
+}
+
+model Clip {
+  id                  String    @id @default(cuid())
+  assignmentId        String
+  userId              String
+  groupId             String
+  videoUrl            String
+  thumbnailUrl        String
+  thumbnailBlurUrl    String?
+  hlsUrl              String?
+  transcodeStatus     String    @default("UPLOADING")
+  transcodeAttempts   Int       @default(0)
+  transcodeJobId      String?   @unique
+  transcodeDispatchAt DateTime?
+  mediaType           String    @default("vlog")
+
+  storageTier String    @default("HOT")
+  archivedAt  DateTime?
+
+  location    String?
+  metadata    String?   @db.Text
+  recordedAt  DateTime  @default(now())
+  finalizedAt DateTime?
+
+  assignment        DailyAssignment    @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  group             Group              @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  reactions         Reaction[]
+  photoResponses    PhotoResponse[]
+  comments          Comment[]
+  views             View[]
+  mediaUploadGrants MediaUploadGrant[]
+
+  @@index([assignmentId])
+  @@index([userId])
+  @@index([groupId])
+  @@map("clips")
+}
+
+model BoostPurchase {
+  id            String   @id @default(uuid())
+  userId        String
+  transactionId String   @unique
+  productId     String
+  store         String?
+  isSandbox     Boolean  @default(false)
+  purchasedAt   DateTime
+  createdAt     DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purchasedAt])
+  @@map("boost_purchases")
+}
+
+model TranscoderWebhookEvent {
+  id          String    @id
+  jobId       String
+  event       String
+  receivedAt  DateTime  @default(now())
+  processedAt DateTime?
+
+  @@unique([jobId, event])
+  @@index([jobId])
+  @@map("transcoder_webhook_events")
+}
+
+model MediaUploadGrant {
+  id          String    @id @default(uuid())
+  path        String    @unique
+  userId      String
+  clipId      String
+  mediaType   String
+  contentType String
+  maxBytes    Int
+  expiresAt   DateTime
+  consumedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clip Clip @relation(fields: [clipId], references: [id], onDelete: Cascade)
+
+  @@index([userId, clipId])
+  @@map("media_upload_grants")
+}
+
+model PhotoResponse {
+  id        String   @id @default(uuid())
+  clipId    String
+  userId    String
+  imageUrl  String
+  mediaType String   @default("photo") // Determines if it's a photo or a snippet video
+  createdAt DateTime @default(now())
+
+  clip Clip @relation(fields: [clipId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([clipId, userId])
+  @@index([clipId])
+  @@index([userId])
+  @@map("photo_responses")
+}
+
+model Reaction {
+  id        String   @id @default(uuid())
+  clipId    String
+  userId    String
+  emoji     String
+  createdAt DateTime @default(now())
+
+  clip Clip @relation(fields: [clipId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([clipId, userId, emoji])
+  @@index([clipId])
+  @@index([userId])
+  @@map("reactions")
+}
+
+model Comment {
+  id        String   @id @default(uuid())
+  clipId    String
+  userId    String
+  text      String
+  parentId  String?
+  createdAt DateTime @default(now())
+
+  clip    Clip      @relation(fields: [clipId], references: [id], onDelete: Cascade)
+  user    User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parent  Comment?  @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies Comment[] @relation("CommentReplies")
+
+  @@index([clipId])
+  @@index([userId])
+  @@index([parentId])
+  @@map("comments")
+}
+
+model View {
+  id        String   @id @default(uuid())
+  clipId    String
+  userId    String
+  createdAt DateTime @default(now())
+
+  clip Clip @relation(fields: [clipId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([clipId, userId])
+  @@index([clipId])
+  @@index([userId])
+  @@map("views")
+}
+
+model PushSubscription {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model UnlockedAchievement {
+  id            String   @id @default(uuid())
+  userId        String
+  achievementId String
+  groupId       String   @default("global")
+  unlockedAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, achievementId, groupId])
+  @@index([userId])
+  @@map("unlocked_achievements")
+}
+
+model BetaApplication {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  createdAt DateTime @default(now())
+
+  @@map("beta_applications")
+}
+
+model ActiveUpload {
+  id             String   @id @default(uuid())
+  uploadId       String   @unique
+  key            String   @unique
+  groupId        String
+  assignmentId   String
+  userId         String
+  clipId         String   @unique
+  mediaType      String   @default("vlog")
+  contentType    String
+  expectedChunks Int
+  expectedBytes  BigInt
+  status         String   @default("INITIATED")
+  expiresAt      DateTime
+  location       String?
+  caption        String?
+  metadata       String?  @db.Text
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@map("active_uploads")
+}

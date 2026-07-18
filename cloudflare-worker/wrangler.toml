@@ -1,0 +1,9 @@
+name = "myturn-media-worker"
+main = "src/worker.js"
+compatibility_date = "2026-07-13"
+
+# Set MEDIA_SECRET_KEY, B2_ACCESS_KEY_ID, and B2_SECRET_ACCESS_KEY with
+# `wrangler secret put`. The B2 application key must be limited to read/list
+# access for the archive bucket; this Worker never needs write/delete access.
+# Non-secret values and the production R2 binding are configured in the
+# Cloudflare environment during deployment.
