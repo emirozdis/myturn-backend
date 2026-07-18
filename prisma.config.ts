@@ -7,6 +7,8 @@ export default defineConfig({
     path: "prisma/migrations",
   },
   datasource: {
-    url: process.env.DATABASE_URL!,
+    // Migrations need a direct or session-mode connection. The Vercel runtime
+    // uses DATABASE_URL through Supavisor transaction mode instead.
+    url: process.env.DIRECT_URL!,
   },
 });
