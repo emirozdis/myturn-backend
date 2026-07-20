@@ -5,6 +5,24 @@ import { sendPushToUser } from "@/lib/push-server";
 import { reportError } from "@/lib/observability/logger";
 import { getBusinessClock, getBusinessDate } from "@/lib/business-time";
 
+// A daily turn only has product value when there is someone else in the
+// group to share it with. Keep this rule in the assignment domain layer so
+// cron jobs, API reads, and membership events cannot disagree about it.
+export const MIN_MEMBERS_FOR_DAILY_ASSIGNMENT = 2;
+export const AUTO_PASS_LOCAL_MINUTE = 12 * 60 + 30;
+export const AUTO_PASS_MIN_ASSIGNMENT_AGE_MS = 3.5 * 60 * 60 * 1000;
+
+export function isAutomaticPassDue(
+  assignmentCreatedAt: Date | string,
+  currentLocalMinute: number,
+  now = new Date(),
+): boolean {
+  const createdAt = new Date(assignmentCreatedAt).getTime();
+  return Number.isFinite(createdAt)
+    && currentLocalMinute >= AUTO_PASS_LOCAL_MINUTE
+    && now.getTime() - createdAt >= AUTO_PASS_MIN_ASSIGNMENT_AGE_MS;
+}
+
 export function getVlogCircadianState(timezone: string) {
   const now = new Date();
   const { hour, minute, second } = getBusinessClock(now, timezone);
@@ -107,14 +125,14 @@ export async function processGroupDayTransition(groupId: string, localDate: Date
           category: "recaps",
           key: "recapFriend",
           vars: { group: assignment.group.name },
-          url: "/streaks",
+          deepLink: { screen: "streaks", groupId, date: assignment.date.toISOString() },
         });
       } else {
         await sendPushToUser(member.userId, {
           category: "recaps",
           key: "recapOwn",
           vars: { group: assignment.group.name },
-          url: "/streaks",
+          deepLink: { screen: "streaks", groupId, date: assignment.date.toISOString() },
         });
       }
     }
@@ -157,7 +175,7 @@ export async function rollGroupAssignmentForDate(groupId: string, localDate: Dat
     include: { members: true },
   });
 
-  if (!group || group.members.length === 0) {
+  if (!group || group.members.length < MIN_MEMBERS_FOR_DAILY_ASSIGNMENT) {
     return null;
   }
 
@@ -286,13 +304,13 @@ export async function rollGroupAssignmentForDate(groupId: string, localDate: Dat
           category: "turns",
           key: forceUserId ? "mandatoryTurn" : "yourTurn",
           vars: { group: group.name },
-          url: "/record",
+          deepLink: { screen: "record", groupId, assignmentId: assignment.id },
         });
       } else {
         await sendPushToUser(member.userId, {
           category: "turns",
           key: "todayVloggerSelected",
-          url: "/today",
+          deepLink: { screen: "today", groupId, assignmentId: assignment.id },
         });
       }
     }

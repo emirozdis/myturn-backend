@@ -10,6 +10,7 @@ import { calculateGroupLevel } from "@/lib/vibe";
 import { generateEdgeUrl } from "@/lib/media-signing";
 import { rateLimit } from "@/lib/rate-limit";
 import { r2 } from "@/lib/r2";
+import { b2 } from "@/lib/b2";
 import { generateMissingThumbnails } from "@/lib/transcoder";
 import { randomUUID } from "crypto";
 import { checkUserProStatus, isArchiveLocked } from "../../../lib/pro-helper";
@@ -17,17 +18,45 @@ import {
   getVlogCircadianState,
   rollGroupAssignmentForDate,
   checkAndUnlockAchievement,
-  getLocalDateInTimezone
+  getLocalDateInTimezone,
+  MIN_MEMBERS_FOR_DAILY_ASSIGNMENT,
+  isAutomaticPassDue,
 } from "@/lib/vlog-helpers";
 import { authorizeMediaRead } from "@/lib/media-authorization";
 import { finalizeUploadedClip } from "@/lib/upload-finalization";
 import { claimCurrentAssignment, passCurrentAssignment } from "@/lib/assignment-transitions";
 import { Prisma } from "@prisma/client";
-import { hlsSafeResponses, publicClipPlaybackUrl } from "@/lib/media-delivery";
+import { hlsSafeResponses, publicClipPlaybackUrl, publicResponseMediaUrls } from "@/lib/media-delivery";
+import { localizePrompt, localizePromptText } from "@/lib/prompt-localization";
+import { findMentionedUserIds } from "@/lib/comment-mentions";
 
 const ALLOWED_REACTION_EMOJIS = new Set(["❤️"]);
 const MAX_COMMENT_LENGTH = 500;
 const MAX_DAILY_COMMENTS = 100;
+
+async function getUserLocale(userId: string): Promise<string> {
+  const user = await db.user.findUnique({ where: { id: userId }, select: { locale: true } });
+  return user?.locale || "en";
+}
+
+async function getRequestLocale(req: NextRequest, userId: string): Promise<string> {
+  const requestedLocale = req.headers.get("x-myturn-locale");
+  if (requestedLocale === "en" || requestedLocale === "tr") return requestedLocale;
+  return getUserLocale(userId);
+}
+
+async function getLocalizedPromptForUser(
+  text: string | null,
+  userId: string,
+  req: NextRequest,
+): Promise<string | null> {
+  if (!text) return null;
+  const [prompt, locale] = await Promise.all([
+    db.prompt.findUnique({ where: { text }, select: { text: true, translations: true } }),
+    getRequestLocale(req, userId),
+  ]);
+  return prompt ? localizePrompt(prompt, locale) : text;
+}
 
 async function GETHandler(req: NextRequest) {
   try {
@@ -67,10 +96,13 @@ async function GETHandler(req: NextRequest) {
 
       const circadian = getVlogCircadianState(group.timezone);
 
-      const promptCatalog = await db.prompt.findMany({
-        select: { text: true },
-        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-      });
+      const [promptCatalog, locale] = await Promise.all([
+        db.prompt.findMany({
+          select: { text: true, translations: true },
+          orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        }),
+        getRequestLocale(req, session.user.id),
+      ]);
       if (promptCatalog.length === 0) {
         throw new AppError({
           code: "PROMPT_CATALOG_EMPTY",
@@ -81,10 +113,13 @@ async function GETHandler(req: NextRequest) {
       }
 
       const promptIndex = Math.floor(circadian.businessDate.getTime() / 86400000) % promptCatalog.length;
-      const dailyPrompt = promptCatalog[promptIndex].text;
+      const dailyPrompt = localizePrompt(promptCatalog[promptIndex], locale);
+      const isWaitingForMembers = group.members.length < MIN_MEMBERS_FOR_DAILY_ASSIGNMENT;
 
       let assignment;
-      if (circadian.isSleepMode) {
+      if (isWaitingForMembers) {
+        assignment = null;
+      } else if (circadian.isSleepMode) {
         assignment = await db.dailyAssignment.findFirst({
           where: { groupId, date: circadian.businessDate },
         });
@@ -96,7 +131,9 @@ async function GETHandler(req: NextRequest) {
       let canVolunteer = false;
       let volunteerEligibilityReason = "";
 
-      if (circadian.isSleepMode && session.user.id) {
+      if (isWaitingForMembers) {
+        volunteerEligibilityReason = "At least two group members are required before a vlogger can be selected.";
+      } else if (circadian.isSleepMode && session.user.id) {
         const volunteerRecord = await db.volunteer.findUnique({
           where: {
             groupId_userId_targetDate: {
@@ -155,6 +192,11 @@ async function GETHandler(req: NextRequest) {
         return NextResponse.json({ 
           success: true, 
           assignment: null, 
+          assignmentAvailability: {
+            status: isWaitingForMembers ? "waiting_for_members" : circadian.isSleepMode ? "sleep_mode" : "unavailable",
+            memberCount: group.members.length,
+            minimumMemberCount: MIN_MEMBERS_FOR_DAILY_ASSIGNMENT,
+          },
           isSleepMode: circadian.isSleepMode,
           sleepTimeLeftSeconds: circadian.sleepTimeLeftSeconds,
           wakingTimeLeftSeconds: circadian.wakingTimeLeftSeconds,
@@ -210,7 +252,7 @@ async function GETHandler(req: NextRequest) {
         : 0;
       if (fullyPopulatedAssignment && uploadedClipCount === 0 && !fullyPopulatedAssignment.isPassed) {
         const currentMinutes = circadian.currentHour * 60 + (circadian.currentMinute || 0);
-        if (currentMinutes >= 750) {
+        if (isAutomaticPassDue(fullyPopulatedAssignment.createdAt, currentMinutes)) {
           const passed = await passCurrentAssignment(fullyPopulatedAssignment.id, fullyPopulatedAssignment.userId, true);
           if (passed) {
             fullyPopulatedAssignment.isPassed = true;
@@ -267,14 +309,7 @@ async function GETHandler(req: NextRequest) {
             ? thumbnailBlurTarget 
             : generateEdgeUrl("vlogs", thumbnailBlurTarget, 3600, clip.storageTier);
 
-          clip.photoResponses = hlsSafeResponses(clip.photoResponses);
-          if (clip.photoResponses) {
-            for (const pr of clip.photoResponses) {
-              if (!pr.imageUrl.startsWith("http") && !pr.imageUrl.startsWith("/")) {
-                pr.imageUrl = generateEdgeUrl("vlogs", pr.imageUrl, 3600, clip.storageTier);
-              }
-            }
-          }
+          clip.photoResponses = publicResponseMediaUrls(hlsSafeResponses(clip.photoResponses), clip.storageTier);
         }
       }
 
@@ -297,6 +332,7 @@ async function GETHandler(req: NextRequest) {
       const assignmentWithMetrics = fullyPopulatedAssignment
         ? {
             ...fullyPopulatedAssignment,
+            activePrompt: localizePromptText(fullyPopulatedAssignment.activePrompt, promptCatalog, locale),
             user: {
               ...fullyPopulatedAssignment.user,
               vlogCount: vloggerClipStats.length,
@@ -309,6 +345,11 @@ async function GETHandler(req: NextRequest) {
       return NextResponse.json({ 
         success: true, 
         assignment: assignmentWithMetrics,
+        assignmentAvailability: {
+          status: "assigned",
+          memberCount: group.members.length,
+          minimumMemberCount: MIN_MEMBERS_FOR_DAILY_ASSIGNMENT,
+        },
         isSleepMode: circadian.isSleepMode,
         sleepTimeLeftSeconds: circadian.sleepTimeLeftSeconds,
         wakingTimeLeftSeconds: circadian.wakingTimeLeftSeconds,
@@ -404,14 +445,7 @@ async function GETHandler(req: NextRequest) {
           ? thumbnailBlurTarget 
           : generateEdgeUrl("vlogs", thumbnailBlurTarget, 3600, clip.storageTier);
 
-        activeClip.photoResponses = hlsSafeResponses(activeClip.photoResponses);
-        if (activeClip.photoResponses) {
-          for (const pr of activeClip.photoResponses) {
-            pr.imageUrl = pr.imageUrl.startsWith("http") || pr.imageUrl.startsWith("/")
-              ? pr.imageUrl
-              : generateEdgeUrl("vlogs", pr.imageUrl, 3600, clip.storageTier);
-          }
-        }
+        activeClip.photoResponses = publicResponseMediaUrls(hlsSafeResponses(activeClip.photoResponses), clip.storageTier);
 
         resolvedClips.push({
           ...activeClip,
@@ -424,7 +458,11 @@ async function GETHandler(req: NextRequest) {
 
       return NextResponse.json({
         success: true,
-        assignment: { ...assignment, clips: resolvedClips }
+        assignment: {
+          ...assignment,
+          activePrompt: await getLocalizedPromptForUser(assignment.activePrompt, session.user.id, req),
+          clips: resolvedClips,
+        }
       });
     }
 
@@ -518,14 +556,7 @@ async function GETHandler(req: NextRequest) {
         ? thumbnailBlurTarget 
         : generateEdgeUrl("vlogs", thumbnailBlurTarget, 3600, clip.storageTier);
 
-      clip.photoResponses = hlsSafeResponses(clip.photoResponses);
-      if (clip.photoResponses) {
-        for (const pr of clip.photoResponses) {
-          if (!pr.imageUrl.startsWith("http") && !pr.imageUrl.startsWith("/")) {
-            pr.imageUrl = generateEdgeUrl("vlogs", pr.imageUrl, 3600, clip.storageTier);
-          }
-        }
-      }
+      clip.photoResponses = publicResponseMediaUrls(hlsSafeResponses(clip.photoResponses), clip.storageTier);
 
       return NextResponse.json({ success: true, clip });
     }
@@ -660,12 +691,18 @@ async function POSTHandler(req: NextRequest) {
           await sendPushToUser(m.userId, {
             category: "turns",
             key: "cameraAvailable",
-            url: "/today"
+            deepLink: { screen: "today", groupId: updated.groupId, assignmentId: updated.id }
           });
         }
       }
 
-      return NextResponse.json({ success: true, assignment: updated });
+      return NextResponse.json({
+        success: true,
+        assignment: {
+          ...updated,
+          activePrompt: await getLocalizedPromptForUser(updated.activePrompt, session.user.id, req),
+        },
+      });
     }
 
     if (action === "claimTurn") {
@@ -681,12 +718,18 @@ async function POSTHandler(req: NextRequest) {
             category: "turns",
             key: "cameraClaimed",
             vars: { actor: claimer?.name },
-            url: "/today"
+            deepLink: { screen: "today", groupId: updated.groupId, assignmentId: updated.id }
           });
         }
       }
 
-      return NextResponse.json({ success: true, assignment: updated });
+      return NextResponse.json({
+        success: true,
+        assignment: {
+          ...updated,
+          activePrompt: await getLocalizedPromptForUser(updated.activePrompt, session.user.id, req),
+        },
+      });
     }
 
     if (action === "requestPhotoResponseUpload") {
@@ -706,11 +749,16 @@ async function POSTHandler(req: NextRequest) {
 
       const responseUploadLimit = rateLimit(`response_upload_${session.user.id}`, 10, 60_000);
       if (!responseUploadLimit.success) return NextResponse.json({ error: "Too many upload attempts." }, { status: 429 });
+      if (mediaType !== undefined && mediaType !== "photo") {
+        return NextResponse.json({ error: "Photo responses only support images." }, { status: 400 });
+      }
       const existingResponse = await db.photoResponse.findUnique({
         where: { clipId_userId: { clipId, userId: session.user.id } },
-        select: { id: true },
+        select: { id: true, imageUrl: true, mediaType: true, transcodeStatus: true },
       });
-      if (existingResponse) return NextResponse.json({ error: "You already responded to this clip." }, { status: 409 });
+      if (existingResponse?.mediaType === "photo") {
+        return NextResponse.json({ error: "You already responded to this clip." }, { status: 409 });
+      }
       const activeGrants = await db.mediaUploadGrant.count({
         where: { userId: session.user.id, consumedAt: null, expiresAt: { gt: new Date() } },
       });
@@ -728,12 +776,9 @@ async function POSTHandler(req: NextRequest) {
         return NextResponse.json({ error: "Bu arşiv kilitlidir. Eylem gerçekleştirilemez." }, { status: 403 });
       }
 
-      if (mediaType !== undefined && mediaType !== "photo") {
-        return NextResponse.json({ error: "Video responses are unavailable because playback must use HLS." }, { status: 400 });
-      }
-      const resolvedMediaType = 'photo';
-      const ext = 'jpg';
-      const contentType = 'image/jpeg';
+      const resolvedMediaType = "photo";
+      const ext = "jpg";
+      const contentType = "image/jpeg";
       const fileId = randomUUID();
       const path = `${clip.groupId}/${clip.assignmentId}/responses/${fileId}.${ext}`;
       await db.mediaUploadGrant.create({
@@ -759,7 +804,10 @@ async function POSTHandler(req: NextRequest) {
       if (assignment.userId !== session.user.id) return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
       if (assignment.promptSkips >= 3) return NextResponse.json({ error: "No skips left" }, { status: 400 });
 
-      const prompts = await db.prompt.findMany();
+      const [prompts, locale] = await Promise.all([
+        db.prompt.findMany({ select: { text: true, translations: true } }),
+        getRequestLocale(req, session.user.id),
+      ]);
       if (prompts.length === 0) {
         throw new AppError({
           code: "PROMPT_CATALOG_EMPTY",
@@ -769,11 +817,11 @@ async function POSTHandler(req: NextRequest) {
         });
       }
 
-      let newPrompt = prompts[Math.floor(Math.random() * prompts.length)].text;
+      let newPrompt = prompts[Math.floor(Math.random() * prompts.length)];
       
       for(let i=0; i<5; i++) {
-         const candidate = prompts[Math.floor(Math.random() * prompts.length)]?.text;
-         if (candidate && candidate !== assignment.activePrompt) {
+         const candidate = prompts[Math.floor(Math.random() * prompts.length)];
+         if (candidate && candidate.text !== assignment.activePrompt) {
            newPrompt = candidate;
            break;
          }
@@ -782,12 +830,16 @@ async function POSTHandler(req: NextRequest) {
       const updatedAssignment = await db.dailyAssignment.update({
         where: { id: assignmentId },
         data: {
-          activePrompt: newPrompt,
+          activePrompt: newPrompt.text,
           promptSkips: assignment.promptSkips + 1
         }
       });
 
-      return NextResponse.json({ success: true, activePrompt: updatedAssignment.activePrompt, promptSkips: updatedAssignment.promptSkips });
+      return NextResponse.json({
+        success: true,
+        activePrompt: localizePrompt(newPrompt, locale),
+        promptSkips: updatedAssignment.promptSkips,
+      });
     }
 
     if (action === "toggleVolunteer") {
@@ -801,6 +853,11 @@ async function POSTHandler(req: NextRequest) {
         include: { group: { select: { timezone: true } } },
       });
       if (!member) return NextResponse.json({ error: "Bu gruba üye değilsiniz." }, { status: 403 });
+
+      const memberCount = await db.groupMember.count({ where: { groupId } });
+      if (memberCount < MIN_MEMBERS_FOR_DAILY_ASSIGNMENT) {
+        return NextResponse.json({ error: "Vlogger seçimi için grupta en az iki üye olmalıdır." }, { status: 409 });
+      }
 
       const localDate = await getLocalDateInTimezone(member.group.timezone);
       const existing = await db.volunteer.findUnique({
@@ -834,9 +891,12 @@ async function POSTHandler(req: NextRequest) {
       if (!rlPhoto.success) {
         return NextResponse.json({ error: `Lütfen tekrar denemeden önce biraz bekleyin.` }, { status: 429 });
       }
+      if (mediaType !== undefined && mediaType !== "photo") {
+        return NextResponse.json({ error: "Photo responses only support images." }, { status: 400 });
+      }
 
       if (typeof path !== "string") return NextResponse.json({ error: "Missing upload path." }, { status: 400 });
-      const clip = await db.clip.findUnique({ where: { id: clipId }, select: { recordedAt: true, groupId: true } });
+      const clip = await db.clip.findUnique({ where: { id: clipId }, select: { recordedAt: true, groupId: true, storageTier: true } });
       if (!clip) return NextResponse.json({ error: "Clip not found" }, { status: 404 });
 
       const member = await db.groupMember.findUnique({
@@ -857,19 +917,15 @@ async function POSTHandler(req: NextRequest) {
         where: { clipId, userId: session.user.id },
       });
 
-      if (existing) {
+      if (existing?.mediaType === "photo") {
         return NextResponse.json({ error: "You already added a photo response to this clip." }, { status: 400 });
       }
 
       const grant = await db.mediaUploadGrant.findFirst({
         where: { path, clipId, userId: session.user.id, consumedAt: null, expiresAt: { gt: new Date() } },
       });
-      if (!grant || (mediaType && mediaType !== grant.mediaType)) {
+      if (!grant || grant.mediaType !== "photo" || (mediaType && mediaType !== "photo")) {
         return NextResponse.json({ error: "Upload grant is invalid or expired." }, { status: 403 });
-      }
-      if (grant.mediaType !== "photo") {
-        await r2.deleteObjects("vlogs", [path]).catch(() => {});
-        return NextResponse.json({ error: "Video responses are unavailable because playback must use HLS." }, { status: 400 });
       }
       const object = await r2.head("vlogs", path).catch(() => null);
       if (!object || Number(object.ContentLength || 0) < 1 || Number(object.ContentLength) > grant.maxBytes || object.ContentType !== grant.contentType) {
@@ -883,11 +939,34 @@ async function POSTHandler(req: NextRequest) {
           data: { consumedAt: new Date() },
         });
         if (consumed.count !== 1) throw new Error("Upload grant was already consumed.");
+        if (existing) {
+          const removedLegacySnippet = await tx.photoResponse.deleteMany({
+            where: { id: existing.id, mediaType: { not: "photo" } },
+          });
+          if (removedLegacySnippet.count !== 1) throw new Error("Legacy response could not be replaced.");
+        }
         return tx.photoResponse.create({
-          data: { clipId, userId: session.user.id, imageUrl: path, mediaType: grant.mediaType },
+          data: {
+            clipId,
+            userId: session.user.id,
+            imageUrl: path,
+            mediaType: "photo",
+            transcodeStatus: "COMPLETED",
+          },
           include: { user: { select: { id: true, name: true, image: true, handle: true } } },
         });
       });
+
+      if (existing) {
+        deleteResponseStorageAssets(existing, clip.storageTier).catch((cleanupError) => {
+          reportWarning(
+            "photo_response.legacy_snippet_cleanup_failed",
+            cleanupError,
+            { photoResponseId: existing.id, clipId },
+            "Legacy snippet response assets could not be removed",
+          );
+        });
+      }
 
       try {
         const targetClip = await db.clip.findUnique({
@@ -895,20 +974,27 @@ async function POSTHandler(req: NextRequest) {
           include: { group: { select: { name: true } }, user: { select: { id: true } } },
         });
 
-        if (targetClip && targetClip.userId !== session.user.id) {
+        if (photoResponse.mediaType === "photo" && targetClip && targetClip.userId !== session.user.id) {
           const responder = await db.user.findUnique({ where: { id: session.user.id }, select: { name: true } });
           await sendPushToUser(targetClip.userId, {
             category: "interactions",
             key: "photoResponse",
             vars: { actor: responder?.name, group: targetClip.group.name },
-            url: "/today",
+            deepLink: { screen: "today", groupId: targetClip.groupId, clipId, focus: "responses", itemId: photoResponse.id },
           });
         }
       } catch (pushErr) {
         reportError("push.photo_response_failed", pushErr, { clipId });
       }
 
-      return NextResponse.json({ success: true, photoResponse });
+      const [publicPhotoResponse] = publicResponseMediaUrls([photoResponse], clip.storageTier);
+
+      return NextResponse.json({
+        success: true,
+        photoResponse: publicPhotoResponse,
+        processing: false,
+        responseId: photoResponse.id,
+      });
     }
 
     if (action === "pokeVlogger") {
@@ -973,7 +1059,7 @@ async function POSTHandler(req: NextRequest) {
         category: "reminders",
         key: "poke",
         vars: { actor: poker?.name, group: assignment.group.name },
-        url: "/record"
+        deepLink: { screen: "record", groupId: assignment.groupId, assignmentId: assignment.id }
       });
       
       return NextResponse.json({ success: true });
@@ -1049,7 +1135,7 @@ async function POSTHandler(req: NextRequest) {
             category: "interactions",
             key: "reaction",
             vars: { actor: reactor?.name, group: targetClip.group.name, emoji },
-            url: "/today",
+            deepLink: { screen: "today", groupId: targetClip.groupId, clipId, focus: "reactions", itemId: reaction.id, userId: session.user.id },
           });
         }
       } catch (pushErr) {
@@ -1176,34 +1262,30 @@ async function POSTHandler(req: NextRequest) {
       }
 
       try {
-        const commenter = await db.user.findUnique({ where: { id: session.user.id }, select: { name: true } });
+        const commenter = await db.user.findUnique({
+          where: { id: session.user.id },
+          select: { name: true, handle: true },
+        });
         const truncatedText = text.length > 60 ? `${text.substring(0, 57)}...` : text;
-
-        const mentions = text.match(/@([a-zA-Z0-9_]+)/g);
         const notifiedUserIds = new Set<string>();
+        const mentionableMembers = await db.groupMember.findMany({
+          where: { groupId: clip.groupId },
+          select: { user: { select: { id: true, handle: true } } },
+        });
+        const mentionedUserIds = findMentionedUserIds(
+          text,
+          mentionableMembers.map(({ user }) => user),
+        ).filter((userId) => userId !== session.user.id);
 
-        if (mentions) {
-          const handles = [...new Set(mentions.map((m: string) => m.substring(1).toLowerCase()))].slice(0, 5);
-          const mentionedUsers = await db.user.findMany({
-            where: {
-              handle: { in: handles },
-              groupMembers: { some: { groupId: clip.groupId } },
-            },
-            select: { id: true },
+        await Promise.all(mentionedUserIds.map(async (userId) => {
+          notifiedUserIds.add(userId);
+          await sendPushToUser(userId, {
+            category: "interactions",
+            key: "mention",
+            vars: { actor: commenter?.name || commenter?.handle, text: truncatedText },
+            deepLink: { screen: "today", groupId: clip.groupId, clipId, focus: "comments", itemId: comment.id },
           });
-
-          for (const u of mentionedUsers) {
-            if (u.id !== session.user.id) {
-              notifiedUserIds.add(u.id);
-              await sendPushToUser(u.id, {
-                category: "interactions",
-                key: "mention",
-                vars: { actor: commenter?.name, text: truncatedText },
-                url: "/today",
-              });
-            }
-          }
-        }
+        }));
 
         if (parentComment) {
           if (parentComment.userId !== session.user.id && !notifiedUserIds.has(parentComment.userId)) {
@@ -1211,8 +1293,8 @@ async function POSTHandler(req: NextRequest) {
             await sendPushToUser(parentComment.userId, {
               category: "interactions",
               key: "commentReply",
-              vars: { actor: commenter?.name, text: truncatedText },
-              url: "/today",
+              vars: { actor: commenter?.name || commenter?.handle, text: truncatedText },
+              deepLink: { screen: "today", groupId: clip.groupId, clipId, focus: "comments", itemId: comment.id },
             });
           }
         }
@@ -1226,8 +1308,8 @@ async function POSTHandler(req: NextRequest) {
           await sendPushToUser(targetClip.userId, {
             category: "interactions",
             key: "comment",
-            vars: { actor: commenter?.name, text: truncatedText },
-            url: "/today",
+            vars: { actor: commenter?.name || commenter?.handle, text: truncatedText },
+            deepLink: { screen: "today", groupId: targetClip.groupId, clipId, focus: "comments", itemId: comment.id },
           });
         }
       } catch (pushErr) {
@@ -1344,7 +1426,51 @@ async function POSTHandler(req: NextRequest) {
   }
 }
 
-async function deleteClipStorageAssets(clip: { videoUrl?: string | null; thumbnailUrl?: string | null; thumbnailBlurUrl?: string | null; hlsUrl?: string | null }) {
+async function deleteResponseStorageAssets(response: {
+  imageUrl?: string | null;
+  thumbnailUrl?: string | null;
+  thumbnailBlurUrl?: string | null;
+  hlsUrl?: string | null;
+}, storageTier: string) {
+  const directKeys = [response.imageUrl, response.thumbnailUrl, response.thumbnailBlurUrl]
+    .filter((key): key is string => Boolean(key && !key.startsWith("http") && !key.startsWith("/")));
+  const useColdStorage = storageTier === "COLD" || storageTier === "PRUNED";
+  const useBothStores = storageTier === "MIGRATING";
+  const hotKeys = new Set(useColdStorage ? [] : directKeys);
+  const coldKeys = new Set(useColdStorage || useBothStores ? directKeys : []);
+
+  if (response.hlsUrl && !response.hlsUrl.startsWith("http") && !response.hlsUrl.startsWith("/")) {
+    const hlsPrefix = response.hlsUrl.includes("/")
+      ? `${response.hlsUrl.substring(0, response.hlsUrl.lastIndexOf("/"))}/`
+      : "";
+    if (hlsPrefix) {
+      if (!useColdStorage) {
+        (await r2.listObjects("vlogs", hlsPrefix)).forEach((key) => hotKeys.add(key));
+      }
+      if (useColdStorage || useBothStores) {
+        (await b2.listObjects("vlogs", hlsPrefix)).forEach((key) => coldKeys.add(key));
+      }
+    }
+  }
+
+  await Promise.all([
+    hotKeys.size ? r2.deleteObjects("vlogs", Array.from(hotKeys)) : Promise.resolve(),
+    coldKeys.size ? b2.deleteObjects("vlogs", Array.from(coldKeys)) : Promise.resolve(),
+  ]);
+}
+
+async function deleteClipStorageAssets(clip: {
+  videoUrl?: string | null;
+  thumbnailUrl?: string | null;
+  thumbnailBlurUrl?: string | null;
+  hlsUrl?: string | null;
+  photoResponses?: Array<{
+    imageUrl?: string | null;
+    thumbnailUrl?: string | null;
+    thumbnailBlurUrl?: string | null;
+    hlsUrl?: string | null;
+  }>;
+}) {
   const assetKeys = new Set<string>();
 
   if (clip.videoUrl) assetKeys.add(clip.videoUrl);
@@ -1360,6 +1486,22 @@ async function deleteClipStorageAssets(clip: { videoUrl?: string | null; thumbna
       hlsKeys.forEach((key) => assetKeys.add(key));
     }
     assetKeys.add(clip.hlsUrl);
+  }
+
+  for (const response of clip.photoResponses || []) {
+    if (response.imageUrl) assetKeys.add(response.imageUrl);
+    if (response.thumbnailUrl) assetKeys.add(response.thumbnailUrl);
+    if (response.thumbnailBlurUrl) assetKeys.add(response.thumbnailBlurUrl);
+    if (response.hlsUrl) {
+      const hlsDir = response.hlsUrl.includes("/")
+        ? response.hlsUrl.substring(0, response.hlsUrl.lastIndexOf("/"))
+        : "";
+      if (hlsDir) {
+        const hlsKeys = await r2.listObjects("vlogs", `${hlsDir}/`);
+        hlsKeys.forEach((key) => assetKeys.add(key));
+      }
+      assetKeys.add(response.hlsUrl);
+    }
   }
 
   if (assetKeys.size > 0) {
@@ -1383,7 +1525,7 @@ async function DELETEHandler(req: NextRequest) {
     }
 
     if (intent === "deleteClip") {
-      const clip = await db.clip.findUnique({ where: { id } });
+      const clip = await db.clip.findUnique({ where: { id }, include: { photoResponses: true } });
       if (!clip || clip.userId !== session.user.id) {
         return NextResponse.json({ error: "Unauthorized to delete" }, { status: 403 });
       }

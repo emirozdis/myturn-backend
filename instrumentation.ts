@@ -28,8 +28,14 @@ export async function register() {
     }
 
     logInfo("service.initialized", {}, "MyTurn backend instrumentation initialized");
-    const { startCronJobs } = await import("./lib/cron");
-    startCronJobs();
+
+    // Serverless instances are not guaranteed to stay alive between requests.
+    // In that environment the jobs are invoked through POST /api/cron instead.
+    const shouldStartInternalCron = process.env.CRON_MODE !== "manual" && !process.env.VERCEL;
+    if (shouldStartInternalCron) {
+      const { startCronJobs } = await import("./lib/cron");
+      startCronJobs();
+    }
   }
 }
 

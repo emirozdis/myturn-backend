@@ -8,6 +8,8 @@ import { generateEdgeUrl } from "@/lib/media-signing";
 import { normalizeUtcOffset } from "@/lib/business-time";
 import { createInviteCodeCandidate } from "@/lib/invite-code";
 import { Prisma } from "@prisma/client";
+import { getLocalDateInTimezone, rollGroupAssignmentForDate } from "@/lib/vlog-helpers";
+import { reportError } from "@/lib/observability/logger";
 
 class GroupInvariantError extends Error {
   constructor(message: string, readonly status: number) {
@@ -105,6 +107,7 @@ async function GETHandler(req: NextRequest) {
                   select: {
                     id: true,
                     name: true,
+                    handle: true,
                     image: true,
                   },
                 },
@@ -144,6 +147,7 @@ async function GETHandler(req: NextRequest) {
         level: effectiveLevel,
         boostCount,
         hasBoosted: m.group.boosts?.some(b => b.userId === session.user.id) || false,
+        userBoostCount: m.group.boosts?.filter(b => b.userId === session.user.id).length || 0,
         isFrozen: m.group.isFrozen,
         boostGracePeriodEndsAt: m.group.boostGracePeriodEndsAt?.toISOString() || null,
         boosters: m.group.boosts?.map(b => ({
@@ -155,7 +159,9 @@ async function GETHandler(req: NextRequest) {
         members: m.group.members.map((gm) => ({
           id: gm.user.id,
           name: gm.user.name,
+          handle: gm.user.handle,
           image: gm.user.image,
+          role: gm.role,
         })),
       };
     });
@@ -174,7 +180,7 @@ async function POSTHandler(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { action, name, timezone = "UTC", image, inviteCode, groupId } = body;
+    const { action, name, timezone = "UTC", image, inviteCode, groupId, targetUserId } = body;
 
     if (action === "create") {
       const rl = rateLimit(`create_group_${session.user.id}`, 5, 60000);
@@ -250,6 +256,125 @@ async function POSTHandler(req: NextRequest) {
       return NextResponse.json({ success: true, group: { ...updated, image: signedUrl } });
     }
 
+    if (action === "rotateInviteCode") {
+      if (!groupId) return NextResponse.json({ error: "Missing groupId" }, { status: 400 });
+
+      const rl = rateLimit(`rotate_group_invite_${session.user.id}`, 5, 60000);
+      if (!rl.success) {
+        return NextResponse.json(
+          { error: `Davet kodunu çok sık yeniliyorsunuz. ${rl.retryAfter}s sonra tekrar deneyin.` },
+          { status: 429 }
+        );
+      }
+
+      const membership = await db.groupMember.findUnique({
+        where: { groupId_userId: { groupId, userId: session.user.id } },
+        select: { role: true },
+      });
+      if (!membership || membership.role !== "admin") {
+        return NextResponse.json(
+          { error: "Davet kodunu yalnızca grup yöneticileri yenileyebilir." },
+          { status: 403 }
+        );
+      }
+
+      const inviteCode = await generateInviteCode();
+      const updated = await db.group.update({
+        where: { id: groupId },
+        data: { inviteCode },
+        select: { id: true, inviteCode: true },
+      });
+
+      return NextResponse.json({ success: true, group: updated });
+    }
+
+    if (action === "transferLeadership") {
+      if (!groupId || !targetUserId) {
+        return NextResponse.json({ error: "Missing groupId or targetUserId." }, { status: 400 });
+      }
+      if (targetUserId === session.user.id) {
+        return NextResponse.json({ error: "You are already the group leader." }, { status: 400 });
+      }
+
+      const rl = rateLimit(`transfer_group_leadership_${session.user.id}`, 5, 60000);
+      if (!rl.success) {
+        return NextResponse.json({ error: `Too many leadership changes. Try again in ${rl.retryAfter}s.` }, { status: 429 });
+      }
+
+      await serializable(async (tx) => {
+        const [leader, target] = await Promise.all([
+          tx.groupMember.findUnique({ where: { groupId_userId: { groupId, userId: session.user.id } } }),
+          tx.groupMember.findUnique({ where: { groupId_userId: { groupId, userId: targetUserId } } }),
+        ]);
+        if (!leader || leader.role !== "admin") throw new GroupInvariantError("Only the group leader can transfer leadership.", 403);
+        if (!target) throw new GroupInvariantError("The selected user is not a member of this group.", 404);
+
+        await tx.groupMember.update({ where: { id: leader.id }, data: { role: "member" } });
+        await tx.groupMember.update({ where: { id: target.id }, data: { role: "admin" } });
+      });
+
+      return NextResponse.json({ success: true });
+    }
+
+    if (action === "kickMember") {
+      if (!groupId || !targetUserId) {
+        return NextResponse.json({ error: "Missing groupId or targetUserId." }, { status: 400 });
+      }
+      if (targetUserId === session.user.id) {
+        return NextResponse.json({ error: "Use Leave group to remove yourself." }, { status: 400 });
+      }
+
+      const rl = rateLimit(`kick_group_member_${session.user.id}`, 10, 60000);
+      if (!rl.success) {
+        return NextResponse.json({ error: `You are removing members too fast. Try again in ${rl.retryAfter}s.` }, { status: 429 });
+      }
+
+      await serializable(async (tx) => {
+        const [leader, target, currentBoostCount] = await Promise.all([
+          tx.groupMember.findUnique({ where: { groupId_userId: { groupId, userId: session.user.id } } }),
+          tx.groupMember.findUnique({ where: { groupId_userId: { groupId, userId: targetUserId } } }),
+          tx.groupBoost.count({ where: { groupId } }),
+        ]);
+        if (!leader || leader.role !== "admin") throw new GroupInvariantError("Only the group leader can remove members.", 403);
+        if (!target) throw new GroupInvariantError("The selected user is not a member of this group.", 404);
+        if (target.role === "admin") throw new GroupInvariantError("The group leader cannot be removed.", 400);
+
+        const removedBoost = await tx.groupBoost.deleteMany({ where: { groupId, userId: targetUserId } });
+        await tx.groupMember.delete({ where: { id: target.id } });
+        const remainingCount = await tx.groupMember.count({ where: { groupId } });
+        if (remainingCount <= 4) {
+          await tx.group.update({ where: { id: groupId }, data: { isFrozen: false, boostGracePeriodEndsAt: null } });
+        } else if (removedBoost.count > 0 && currentBoostCount >= 3 && currentBoostCount - removedBoost.count < 3) {
+          await tx.group.update({
+            where: { id: groupId },
+            data: { boostGracePeriodEndsAt: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000) },
+          });
+        }
+      });
+
+      return NextResponse.json({ success: true });
+    }
+
+    if (action === "deleteGroup") {
+      if (!groupId) return NextResponse.json({ error: "Missing groupId." }, { status: 400 });
+
+      const rl = rateLimit(`delete_group_${session.user.id}`, 5, 60000);
+      if (!rl.success) {
+        return NextResponse.json({ error: `You are deleting groups too fast. Try again in ${rl.retryAfter}s.` }, { status: 429 });
+      }
+
+      await serializable(async (tx) => {
+        const leader = await tx.groupMember.findUnique({
+          where: { groupId_userId: { groupId, userId: session.user.id } },
+          select: { role: true },
+        });
+        if (!leader || leader.role !== "admin") throw new GroupInvariantError("Only the group leader can delete this group.", 403);
+        await tx.group.delete({ where: { id: groupId } });
+      });
+
+      return NextResponse.json({ success: true });
+    }
+
     if (action === "join") {
       if (!inviteCode) {
         return NextResponse.json({ error: "Davet kodu zorunludur." }, { status: 400 });
@@ -286,6 +411,21 @@ async function POSTHandler(req: NextRequest) {
         await tx.groupMember.create({ data: { groupId: group.id, userId: session.user.id, role: "member" } });
         return { group, alreadyMember: false };
       });
+
+      // Membership is the event that can make a new group eligible after the
+      // scheduled daily roll has already run. Reconcile immediately; the
+      // unique (groupId, date) constraint keeps this safe alongside cron and
+      // read-time reconciliation.
+      if (!joined.alreadyMember) {
+        try {
+          const localDate = await getLocalDateInTimezone(joined.group.timezone);
+          await rollGroupAssignmentForDate(joined.group.id, localDate);
+        } catch (error) {
+          // Joining the group succeeded and must not be rolled back because a
+          // best-effort assignment/push failed. The next read and cron retry it.
+          reportError("group.assignment_reconciliation_failed", error, { groupId: joined.group.id });
+        }
+      }
 
       return NextResponse.json({ success: true, group: joined.group, alreadyMember: joined.alreadyMember });
     }
@@ -326,7 +466,9 @@ async function DELETEHandler(req: NextRequest) {
       if (!membership) throw new GroupInvariantError("Group membership not found.", 404);
       const remaining = await tx.groupMember.findMany({
         where: { groupId, id: { not: membership.id } },
-        orderBy: [{ role: "asc" }, { joinedAt: "asc" }, { id: "asc" }],
+        // Keep succession deterministic: the earliest remaining member is
+        // first, with the record id resolving the unlikely timestamp tie.
+        orderBy: [{ joinedAt: "asc" }, { id: "asc" }],
       });
       if (remaining.length === 0) {
         await tx.group.delete({ where: { id: groupId } });
@@ -334,6 +476,8 @@ async function DELETEHandler(req: NextRequest) {
       }
       if (membership.role === "admin") {
         const otherAdmin = remaining.some((member) => member.role === "admin");
+        // When the departing member is the final leader, promote the person
+        // who has been in the group the longest.
         if (!otherAdmin) await tx.groupMember.update({ where: { id: remaining[0].id }, data: { role: "admin" } });
       }
       await tx.groupMember.delete({ where: { id: membership.id } });

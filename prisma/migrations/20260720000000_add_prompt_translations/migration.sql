@@ -1,0 +1,2 @@
+ALTER TABLE "prompts"
+ADD COLUMN "translations" JSONB NOT NULL DEFAULT '{}'::JSONB;

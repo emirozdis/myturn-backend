@@ -24,6 +24,7 @@
     "bcryptjs": "^3.0.3",
     "dotenv": "^17.4.2",
     "firebase-admin": "^14.1.0",
+    "google-auth-library": "^10.9.0",
     "next": "^16.2.6",
     "next-auth": "^4.24.14",
     "node-cron": "^4.2.1",

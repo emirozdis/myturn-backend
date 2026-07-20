@@ -52,6 +52,8 @@ export async function archiveClip(clipId: string) {
   }
   for (const pr of clip.photoResponses) {
     assets.push(pr.imageUrl);
+    if (pr.thumbnailUrl) assets.push(pr.thumbnailUrl);
+    if (pr.thumbnailBlurUrl && pr.thumbnailBlurUrl !== pr.thumbnailUrl) assets.push(pr.thumbnailBlurUrl);
   }
   if (!hlsKeys.includes(clip.videoUrl)) {
     assets.push(clip.videoUrl);
@@ -63,7 +65,14 @@ export async function archiveClip(clipId: string) {
     "Transferring clip assets to cold storage",
   );
   
-  const allKeysToMove = [...hlsKeys, ...assets];
+  const responseHlsKeys: string[] = [];
+  for (const response of clip.photoResponses) {
+    if (!isManagedStorageKey(response.hlsUrl) || !response.hlsUrl.includes("/")) continue;
+    const responseHlsDir = response.hlsUrl.substring(0, response.hlsUrl.lastIndexOf("/"));
+    responseHlsKeys.push(...await r2.listObjects("vlogs", `${responseHlsDir}/`));
+  }
+
+  const allKeysToMove = Array.from(new Set([...hlsKeys, ...responseHlsKeys, ...assets]));
   for (const key of allKeysToMove) {
     const buf = await r2.download("vlogs", key);
     await b2.upload("vlogs", key, buf, getContentType(key));
@@ -125,6 +134,8 @@ export async function deleteExpiredClips() {
       clip.thumbnailBlurUrl,
       clip.videoUrl,
       ...clip.photoResponses.map((response) => response.imageUrl),
+      ...clip.photoResponses.map((response) => response.thumbnailUrl),
+      ...clip.photoResponses.map((response) => response.thumbnailBlurUrl),
     ].filter(isManagedStorageKey);
 
     for (const tier of storageTiersForClip(clip.storageTier)) {
@@ -137,6 +148,14 @@ export async function deleteExpiredClips() {
           ? await b2.listObjects("vlogs", `${hlsDir}/`)
           : await r2.listObjects("vlogs", `${hlsDir}/`);
         hlsKeys.forEach((key) => keys.add(key));
+      }
+      for (const response of clip.photoResponses) {
+        if (!isManagedStorageKey(response.hlsUrl) || !response.hlsUrl.includes("/")) continue;
+        const responseHlsDir = response.hlsUrl.substring(0, response.hlsUrl.lastIndexOf("/"));
+        const responseHlsKeys = tier === "cold"
+          ? await b2.listObjects("vlogs", `${responseHlsDir}/`)
+          : await r2.listObjects("vlogs", `${responseHlsDir}/`);
+        responseHlsKeys.forEach((key) => keys.add(key));
       }
     }
 
@@ -157,6 +176,61 @@ export async function deleteExpiredClips() {
 let isArchiving = false;
 const archiverState = globalThis as typeof globalThis & { __archiver_initialized?: boolean };
 
+export async function runArchiverIteration(maxClips = Number.POSITIVE_INFINITY): Promise<Record<string, number>> {
+  if (isArchiving) return { skippedCount: 1 };
+
+  let archivedClipCount = 0;
+  let failedClipCount = 0;
+  try {
+    isArchiving = true;
+    const failedThisRun = new Set<string>();
+
+    while (archivedClipCount + failedClipCount < maxClips) {
+      const twoDaysAgo = new Date(Date.now() - 48 * 3600 * 1000);
+
+      const targetClip = await db.clip.findFirst({
+        where: {
+          id: { notIn: Array.from(failedThisRun) },
+          storageTier: { in: ["HOT", "FAILED_MIGRATION"] },
+          transcodeStatus: "COMPLETED",
+          assignment: { date: { lte: twoDaysAgo } },
+        },
+        orderBy: { recordedAt: "asc" },
+      });
+
+      if (!targetClip) break;
+
+      await db.clip.update({
+        where: { id: targetClip.id },
+        data: { storageTier: "MIGRATING" },
+      });
+
+      logInfo("archive.candidate_claimed", { clipId: targetClip.id }, "Archival candidate claimed");
+
+      try {
+        await archiveClip(targetClip.id);
+        archivedClipCount++;
+        logInfo("archive.candidate_completed", { clipId: targetClip.id }, "Archival candidate moved to cold storage");
+      } catch (error) {
+        failedClipCount++;
+        reportError("archive.candidate_failed", error, { clipId: targetClip.id });
+        failedThisRun.add(targetClip.id);
+
+        await db.clip.update({
+          where: { id: targetClip.id },
+          data: { storageTier: "FAILED_MIGRATION" },
+        });
+      }
+    }
+
+    await pruneArchivedClips();
+    await deleteExpiredClips();
+    return { archivedClipCount, failedClipCount, skippedCount: 0 };
+  } finally {
+    isArchiving = false;
+  }
+}
+
 export async function startArchiverWorker() {
   if (archiverState.__archiver_initialized) return;
   archiverState.__archiver_initialized = true;
@@ -172,55 +246,8 @@ export async function startArchiverWorker() {
     reportError("archive.stuck_migrations_reset_failed", error);
   }
 
-  setInterval(() => void runBackgroundJob("archive-worker-iteration", async () => {
-    if (isArchiving) return;
-    try {
-      isArchiving = true;
-      const failedThisRun = new Set<string>();
-
-      while (true) {
-        const twoDaysAgo = new Date(Date.now() - 48 * 3600 * 1000);
-        
-        const targetClip = await db.clip.findFirst({
-          where: {
-            id: { notIn: Array.from(failedThisRun) },
-            storageTier: { in: ["HOT", "FAILED_MIGRATION"] },
-            transcodeStatus: "COMPLETED",
-            assignment: { date: { lte: twoDaysAgo } }
-          },
-          orderBy: { recordedAt: "asc" },
-        });
-
-        if (!targetClip) break;
-
-        await db.clip.update({
-          where: { id: targetClip.id },
-          data: { storageTier: "MIGRATING" }
-        });
-
-        logInfo("archive.candidate_claimed", { clipId: targetClip.id }, "Archival candidate claimed");
-        
-        try {
-          await archiveClip(targetClip.id);
-          logInfo("archive.candidate_completed", { clipId: targetClip.id }, "Archival candidate moved to cold storage");
-        } catch (err) {
-          reportError("archive.candidate_failed", err, { clipId: targetClip.id });
-          failedThisRun.add(targetClip.id);
-          
-          await db.clip.update({
-            where: { id: targetClip.id },
-            data: { storageTier: "FAILED_MIGRATION" }
-          });
-        }
-      }
-      
-      await pruneArchivedClips();
-      await deleteExpiredClips();
-
-    } catch (error) {
-      reportError("archive.worker_iteration_failed", error);
-    } finally {
-      isArchiving = false;
-    }
-  }), 15 * 60 * 1000);
+  setInterval(
+    () => void runBackgroundJob("archive-worker-iteration", runArchiverIteration),
+    15 * 60 * 1000,
+  );
 }

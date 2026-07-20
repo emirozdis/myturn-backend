@@ -6,6 +6,7 @@ import { startTranscodeJob } from "@/lib/transcoder";
 import { sendPushToUser } from "@/lib/push-server";
 import { getBusinessClock } from "@/lib/business-time";
 import { reportError } from "@/lib/observability/logger";
+import type { RecordingComposition } from "@/lib/recording-composition";
 
 const MAX_VIDEO_BYTES = 250 * 1024 * 1024;
 const MAX_PHOTO_BYTES = 20 * 1024 * 1024;
@@ -80,8 +81,11 @@ async function dispatchTranscode(clipId: string) {
   const hlsDir = clip.videoUrl.substring(0, clip.videoUrl.lastIndexOf("/"));
   const outputHlsPath = hlsDir ? `${hlsDir}/${clip.id}_hls` : `${clip.id}_hls`;
   let facingMode: "user" | "environment" = "user";
+  let composition: RecordingComposition | undefined;
   try {
-    if (JSON.parse(clip.metadata || "{}").facingMode === "environment") facingMode = "environment";
+    const metadata = JSON.parse(clip.metadata || "{}");
+    if (metadata.facingMode === "environment") facingMode = "environment";
+    if (metadata.composition?.version === 1) composition = metadata.composition;
   } catch {}
 
   try {
@@ -92,6 +96,7 @@ async function dispatchTranscode(clipId: string) {
       clip.thumbnailUrl || undefined,
       clip.thumbnailBlurUrl || undefined,
       facingMode,
+      composition,
     );
     await db.clip.updateMany({
       where: { id: clip.id, transcodeJobId, transcodeStatus: "DISPATCHING" },
@@ -207,8 +212,8 @@ export async function finalizeUploadedClip(
       ]);
       const posterName = poster?.name || (poster?.handle ? `@${poster.handle}` : undefined);
       await Promise.allSettled(members.map((member) => sendPushToUser(member.userId, member.userId === clip.userId
-        ? { category: "posts", key: "ownPhotoReady", url: "/today" }
-        : { category: "posts", key: "newPhotoReady", vars: { actor: posterName, group: clip.group.name }, url: "/today" })));
+        ? { category: "posts", key: "ownPhotoReady", deepLink: { screen: "today", groupId: clip.groupId, clipId: clip.id } }
+        : { category: "posts", key: "newPhotoReady", vars: { actor: posterName, group: clip.group.name }, deepLink: { screen: "today", groupId: clip.groupId, clipId: clip.id } })));
     }
 
     return {

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { withApiHandler } from "@/lib/observability/api-handler";
 import { db } from "@/lib/db";
 import { getAuthSession } from "@/lib/auth";
-import { getUserBoostLimit } from "@/lib/pro-helper";
+import { checkUserProStatus } from "@/lib/pro-helper";
 import { rateLimit } from "@/lib/rate-limit";
 
 async function POSTHandler(req: NextRequest) {
@@ -15,7 +15,7 @@ async function POSTHandler(req: NextRequest) {
 
     const rawBody = await req.json();
     const body = Array.isArray(rawBody) ? rawBody[0] : rawBody;
-    const { groupId } = body || {};
+    const { groupId, action } = body || {};
 
     if (!groupId) return NextResponse.json({ error: "Group ID is required when trying to boost a group." }, { status: 400 });
 
@@ -27,15 +27,25 @@ async function POSTHandler(req: NextRequest) {
       return NextResponse.json({ error: "You must be a member of this group." }, { status: 403 });
     }
 
-    const existingBoost = await db.groupBoost.findUnique({
-      where: { groupId_userId: { groupId, userId: session.user.id } }
-    });
+    const requestedAction = action === "add" || action === "remove" ? action : "toggle";
+    const [currentBoosts, userBoosts] = await Promise.all([
+      db.groupBoost.count({ where: { groupId } }),
+      db.groupBoost.findMany({
+        where: { groupId, userId: session.user.id },
+        orderBy: { createdAt: "desc" },
+        select: { id: true },
+      }),
+    ]);
+    const shouldRemove = requestedAction === "remove" || (requestedAction === "toggle" && userBoosts.length > 0);
 
-    const currentBoosts = await db.groupBoost.count({ where: { groupId } });
+    if (shouldRemove) {
+      const boostToRemove = userBoosts[0];
+      if (!boostToRemove) {
+        return NextResponse.json({ error: "This group has no boost to remove." }, { status: 400 });
+      }
 
-    if (existingBoost) {
-      // Revoke the active boost
-      await db.groupBoost.delete({ where: { id: existingBoost.id } });
+      // Remove one allocation at a time so a member can keep their other boosts in this group.
+      await db.groupBoost.delete({ where: { id: boostToRemove.id } });
       const newBoosts = currentBoosts - 1;
       
       // Trigger 3-Day Grace Period if boosts drop below 3
@@ -47,15 +57,20 @@ async function POSTHandler(req: NextRequest) {
         });
       }
 
-      return NextResponse.json({ success: true, boosted: false });
+      return NextResponse.json({ success: true, boosted: false, boostCount: newBoosts, userBoostCount: userBoosts.length - 1 });
     } else {
-      // Allocate a new boost
-      const boostLimit = await getUserBoostLimit(session.user.id);
+      // Allocate a new boost. Pro includes one allocation; every purchased credit
+      // adds another allocation, regardless of whether the account is Pro.
+      const [isPro, user] = await Promise.all([
+        checkUserProStatus(session.user.id),
+        db.user.findUnique({ where: { id: session.user.id }, select: { boostCredits: true } }),
+      ]);
+      const boostLimit = (isPro ? 1 : 0) + (user?.boostCredits || 0);
       const usedBoosts = await db.groupBoost.count({ where: { userId: session.user.id } });
 
       if (usedBoosts >= boostLimit) {
         return NextResponse.json(
-          { error: "Boost hakkınız bulunmuyor. Ekstra hak için MyTurn Pro'ya geçin veya aktif bir boost'unuzu geri alın." }, 
+          { error: "No boost credits are available. Purchase an extra boost or remove one from another group." },
           { status: 403 }
         );
       }
@@ -79,7 +94,7 @@ async function POSTHandler(req: NextRequest) {
         });
       }
 
-      return NextResponse.json({ success: true, boosted: true });
+      return NextResponse.json({ success: true, boosted: true, boostCount: newBoosts, userBoostCount: userBoosts.length + 1 });
     }
   } catch (error: unknown) {
     throw error;

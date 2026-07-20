@@ -2,7 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withApiHandler } from "@/lib/observability/api-handler";
 import { logger } from "@/lib/observability/logger";
-import { hlsSafeResponses, publicClipPlaybackUrl } from "@/lib/media-delivery";
+import { hlsSafeResponses, publicClipPlaybackUrl, publicResponseMediaUrls } from "@/lib/media-delivery";
 import { db } from "@/lib/db";
 import { getAuthSession } from "@/lib/auth";
 import { getVibeArchetype } from "@/lib/vibe";
@@ -129,9 +129,57 @@ async function GETHandler(req: NextRequest) {
     }
 
     const { searchParams } = new URL(req.url);
+    const intent = searchParams.get("intent");
+
+    if (intent === "usernameAvailability") {
+      const availabilityRateLimit = rateLimit(`username_availability_${session.user.id}`, 30, 60000);
+      if (!availabilityRateLimit.success) {
+        return NextResponse.json(
+          { error: `Too many username checks. Try again in ${availabilityRateLimit.retryAfter}s.` },
+          { status: 429 },
+        );
+      }
+
+      const handle = (searchParams.get("handle") || "").toLowerCase().trim();
+      if (!/^[a-z0-9_]{3,20}$/.test(handle)) {
+        return NextResponse.json({ success: true, available: false });
+      }
+
+      const existing = await db.user.findFirst({
+        where: {
+          handle,
+          id: { not: session.user.id },
+        },
+        select: { id: true },
+      });
+
+      return NextResponse.json({ success: true, available: !existing });
+    }
+
     const userId = searchParams.get("userId");
+    const groupId = searchParams.get("groupId");
 
     if (userId) {
+      // A group-scoped profile is only visible to members of that same group.
+      // This also prevents a caller from using a group ID to browse clips from
+      // a group they do not belong to.
+      if (groupId) {
+        const [viewerMembership, profileMembership] = await Promise.all([
+          db.groupMember.findUnique({
+            where: { groupId_userId: { userId: session.user.id, groupId } },
+            select: { userId: true },
+          }),
+          db.groupMember.findUnique({
+            where: { groupId_userId: { userId, groupId } },
+            select: { userId: true },
+          }),
+        ]);
+
+        if (!viewerMembership || !profileMembership) {
+          return NextResponse.json({ error: "Group profile is unavailable" }, { status: 403 });
+        }
+      }
+
       const user = await db.user.findUnique({
         where: { id: userId },
         select: {
@@ -169,6 +217,42 @@ async function GETHandler(req: NextRequest) {
 
       const isThisUserPro = await checkUserProStatus(user.id);
 
+      const rawClips = groupId
+        ? await db.clip.findMany({
+            where: { userId: user.id, groupId, transcodeStatus: "COMPLETED" },
+            orderBy: { recordedAt: "desc" },
+            take: 6,
+            include: {
+              _count: { select: { reactions: true, comments: true } },
+              photoResponses: true,
+            },
+          })
+        : [];
+
+      const clips = rawClips.map((clip) => {
+        const thumbnailUrl = clip.thumbnailUrl.startsWith("http") || clip.thumbnailUrl.startsWith("/")
+          ? clip.thumbnailUrl
+          : generateEdgeUrl("vlogs", clip.thumbnailUrl, 3600, clip.storageTier);
+        const thumbnailBlurTarget = clip.thumbnailBlurUrl || clip.thumbnailUrl;
+        const thumbnailBlurUrl = thumbnailBlurTarget.startsWith("http") || thumbnailBlurTarget.startsWith("/")
+          ? thumbnailBlurTarget
+          : generateEdgeUrl("vlogs", thumbnailBlurTarget, 3600, clip.storageTier);
+        const hlsUrl = clip.hlsUrl && (clip.hlsUrl.startsWith("http") || clip.hlsUrl.startsWith("/"))
+          ? clip.hlsUrl
+          : clip.hlsUrl
+            ? generateEdgeUrl("vlogs", clip.hlsUrl, 3600, clip.storageTier)
+            : null;
+
+        return {
+          ...clip,
+          videoUrl: publicClipPlaybackUrl(clip, hlsUrl),
+          hlsUrl,
+          thumbnailUrl,
+          thumbnailBlurUrl,
+          photoResponses: publicResponseMediaUrls(hlsSafeResponses(clip.photoResponses), clip.storageTier),
+        };
+      });
+
       logger.debug({
         event: "profile.public_served",
         profileUserId: user.id,
@@ -179,7 +263,14 @@ async function GETHandler(req: NextRequest) {
 
       return NextResponse.json({
         success: true,
-        user: { ...user, image: avatarUrl, xp: totalXp, archetype, isPro: isThisUserPro },
+        user: {
+          ...user,
+          image: avatarUrl,
+          xp: totalXp,
+          archetype,
+          isPro: isThisUserPro,
+          ...(groupId ? { clips } : {}),
+        },
       });
     }
 
@@ -255,7 +346,7 @@ async function GETHandler(req: NextRequest) {
           select: {
             reactions: true,
             comments: true,
-            photoResponses: true,
+            photoResponses: { where: { mediaType: "photo" } },
           },
         },
       },
@@ -349,14 +440,9 @@ async function GETHandler(req: NextRequest) {
         ? thumbnailBlurTarget
         : generateEdgeUrl("vlogs", thumbnailBlurTarget, 3600, activeClip.storageTier);
 
-      activeClip.photoResponses = hlsSafeResponses(activeClip.photoResponses);
-      if (activeClip.photoResponses && !locked) {
-        for (const pr of activeClip.photoResponses) {
-          pr.imageUrl = pr.imageUrl.startsWith("http") || pr.imageUrl.startsWith("/")
-            ? pr.imageUrl
-            : generateEdgeUrl("vlogs", pr.imageUrl, 3600, activeClip.storageTier);
-        }
-      }
+      activeClip.photoResponses = locked
+        ? []
+        : publicResponseMediaUrls(hlsSafeResponses(activeClip.photoResponses), activeClip.storageTier);
 
       clips.push({
         ...activeClip,
@@ -612,7 +698,7 @@ async function DELETEHandler(req: NextRequest) {
         thumbnailBlurUrl: true,
         hlsUrl: true,
         storageTier: true,
-        photoResponses: { select: { imageUrl: true } },
+        photoResponses: { select: { imageUrl: true, hlsUrl: true, thumbnailUrl: true, thumbnailBlurUrl: true } },
       },
     });
 
@@ -624,6 +710,9 @@ async function DELETEHandler(req: NextRequest) {
       },
       select: {
         imageUrl: true,
+        hlsUrl: true,
+        thumbnailUrl: true,
+        thumbnailBlurUrl: true,
         clip: { select: { storageTier: true } },
       },
     });
@@ -642,7 +731,11 @@ async function DELETEHandler(req: NextRequest) {
         addStorageKey(keys, clip.thumbnailUrl);
         addStorageKey(keys, clip.thumbnailBlurUrl);
         addStorageKey(keys, clip.hlsUrl);
-        clip.photoResponses.forEach((response) => addStorageKey(keys, response.imageUrl));
+        clip.photoResponses.forEach((response) => {
+          addStorageKey(keys, response.imageUrl);
+          addStorageKey(keys, response.thumbnailUrl);
+          addStorageKey(keys, response.thumbnailBlurUrl);
+        });
 
         if (isManagedStorageKey(clip.hlsUrl) && clip.hlsUrl.includes("/")) {
           const hlsPrefix = `${clip.hlsUrl.substring(0, clip.hlsUrl.lastIndexOf("/"))}/`;
@@ -651,12 +744,30 @@ async function DELETEHandler(req: NextRequest) {
             : await r2.listObjects("vlogs", hlsPrefix);
           hlsKeys.forEach((key) => keys.add(key));
         }
+        for (const response of clip.photoResponses) {
+          if (!isManagedStorageKey(response.hlsUrl) || !response.hlsUrl.includes("/")) continue;
+          const responseHlsPrefix = `${response.hlsUrl.substring(0, response.hlsUrl.lastIndexOf("/"))}/`;
+          const responseHlsKeys = tier === "cold"
+            ? await b2.listObjects("vlogs", responseHlsPrefix)
+            : await r2.listObjects("vlogs", responseHlsPrefix);
+          responseHlsKeys.forEach((key) => keys.add(key));
+        }
       }
     }
 
     for (const response of standaloneResponses) {
       for (const tier of storageTiersForClip(response.clip.storageTier)) {
-        addStorageKey(keysForTier(tier), response.imageUrl);
+        const keys = keysForTier(tier);
+        addStorageKey(keys, response.imageUrl);
+        addStorageKey(keys, response.thumbnailUrl);
+        addStorageKey(keys, response.thumbnailBlurUrl);
+        if (isManagedStorageKey(response.hlsUrl) && response.hlsUrl.includes("/")) {
+          const responseHlsPrefix = `${response.hlsUrl.substring(0, response.hlsUrl.lastIndexOf("/"))}/`;
+          const responseHlsKeys = tier === "cold"
+            ? await b2.listObjects("vlogs", responseHlsPrefix)
+            : await r2.listObjects("vlogs", responseHlsPrefix);
+          responseHlsKeys.forEach((key) => keys.add(key));
+        }
       }
     }
 

@@ -22,20 +22,28 @@ function hlsMasterFor(path: string): string | null {
   return `${parts.slice(0, rootIndex + 1).join("/")}/master.m3u8`;
 }
 
+function canonicalAvatarPath(path: string): string {
+  // Avatar records are stored as full storage keys, including the `avatars/`
+  // prefix. Accept a prefixless legacy client request during rollout, but
+  // always authorize and return the canonical key.
+  return path.startsWith("avatars/") || path.includes("/") ? path : `avatars/${path}`;
+}
+
 export async function authorizeMediaRead(userId: string, bucket: string, rawPath: string) {
   if (!ALLOWED_BUCKETS.has(bucket)) return null;
   const path = normalizePath(rawPath);
   if (!path) return null;
 
   if (bucket === "avatars") {
-    const userAvatar = await db.user.findFirst({ where: { image: path }, select: { id: true } });
-    if (userAvatar) return { path, storageTier: "HOT" };
+    const avatarPath = canonicalAvatarPath(path);
+    const userAvatar = await db.user.findFirst({ where: { image: avatarPath }, select: { id: true } });
+    if (userAvatar) return { path: avatarPath, storageTier: "HOT" };
 
     const groupAvatar = await db.group.findFirst({
-      where: { image: path, members: { some: { userId } } },
+      where: { image: avatarPath, members: { some: { userId } } },
       select: { id: true },
     });
-    return groupAvatar ? { path, storageTier: "HOT" } : null;
+    return groupAvatar ? { path: avatarPath, storageTier: "HOT" } : null;
   }
 
   const rawVideoResponse = await db.photoResponse.findFirst({
@@ -53,7 +61,19 @@ export async function authorizeMediaRead(userId: string, bucket: string, rawPath
         { thumbnailBlurUrl: path },
         { hlsUrl: path },
         ...(possibleHlsMaster ? [{ hlsUrl: possibleHlsMaster }] : []),
-        { photoResponses: { some: { imageUrl: path } } },
+        {
+          photoResponses: {
+            some: {
+              OR: [
+                { imageUrl: path },
+                { hlsUrl: path },
+                { thumbnailUrl: path },
+                { thumbnailBlurUrl: path },
+                ...(possibleHlsMaster ? [{ hlsUrl: possibleHlsMaster }] : []),
+              ],
+            },
+          },
+        },
       ],
     },
     include: {

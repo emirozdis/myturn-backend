@@ -70,15 +70,20 @@ async function POSTHandler(req: NextRequest) {
   }
 
   let callbackClipId: string | undefined;
+  let callbackPhotoResponseId: string | undefined;
   try {
     const parsed = typeof callbackPayload === "string" ? JSON.parse(callbackPayload) : callbackPayload;
     callbackClipId = typeof parsed?.clipId === "string" ? parsed.clipId : undefined;
+    callbackPhotoResponseId = typeof parsed?.photoResponseId === "string" ? parsed.photoResponseId : undefined;
   } catch {
     return NextResponse.json({ error: "Invalid callback metadata." }, { status: 400 });
   }
 
-  const clip = await db.clip.findUnique({ where: { transcodeJobId: jobId } });
-  if (!clip) {
+  const [clip, photoResponse] = await Promise.all([
+    db.clip.findUnique({ where: { transcodeJobId: jobId } }),
+    db.photoResponse.findUnique({ where: { transcodeJobId: jobId } }),
+  ]);
+  if (!clip && !photoResponse) {
     if (event === "Saved") {
       try {
         await deleteOrphanedTranscodeOutput(data);
@@ -94,16 +99,28 @@ async function POSTHandler(req: NextRequest) {
     }
     return NextResponse.json({ error: "Unknown transcoder job." }, { status: 404 });
   }
-  if (callbackClipId !== clip.id) {
+  if ((clip && callbackClipId !== clip.id) || (photoResponse && callbackPhotoResponseId !== photoResponse.id)) {
     return NextResponse.json({ error: "Unknown transcoder job." }, { status: 404 });
   }
 
-  const hlsDir = clip.videoUrl.substring(0, clip.videoUrl.lastIndexOf("/"));
-  const expectedHls = hlsDir ? `${hlsDir}/${clip.id}_hls/master.m3u8` : `${clip.id}_hls/master.m3u8`;
+  const sourceUrl = clip?.videoUrl || photoResponse!.imageUrl;
+  const entityId = clip?.id || photoResponse!.id;
+  const hlsDir = sourceUrl.substring(0, sourceUrl.lastIndexOf("/"));
+  const expectedHls = hlsDir ? `${hlsDir}/${entityId}_hls/master.m3u8` : `${entityId}_hls/master.m3u8`;
+  const responseSourceBase = photoResponse?.imageUrl.replace(/\.[^/.]+$/, "");
+  const expectedResponseThumbnail = responseSourceBase ? `${responseSourceBase}-thumb.jpg` : null;
+  const expectedResponseBlur = responseSourceBase ? `${responseSourceBase}-thumb-blur.jpg` : null;
   const hlsUrl = cleanVirtualKey(data?.hlsUrl);
   const thumbnailUrl = cleanVirtualKey(data?.thumbnailUrl);
   const thumbnailBlurUrl = cleanVirtualKey(data?.thumbnailBlurUrl);
-  if (event === "Saved" && (hlsUrl !== expectedHls || thumbnailUrl !== clip.thumbnailUrl || thumbnailBlurUrl !== clip.thumbnailBlurUrl)) {
+  // Accept callbacks from jobs dispatched just before thumbnail support was
+  // deployed. The retry worker will backfill their missing poster assets.
+  const responsePosterKeysValid = (thumbnailUrl === expectedResponseThumbnail && thumbnailBlurUrl === expectedResponseBlur)
+    || (thumbnailUrl === null && thumbnailBlurUrl === null);
+  const outputKeysInvalid = clip
+    ? hlsUrl !== expectedHls || thumbnailUrl !== clip.thumbnailUrl || thumbnailBlurUrl !== clip.thumbnailBlurUrl
+    : hlsUrl !== expectedHls || !responsePosterKeysValid;
+  if (event === "Saved" && outputKeysInvalid) {
     return NextResponse.json({ error: "Transcoder output keys do not match this job." }, { status: 400 });
   }
 
@@ -125,16 +142,40 @@ async function POSTHandler(req: NextRequest) {
     });
     if (claim.count !== 1) return false;
 
-    if (event === "Saved") {
+    if (event === "Saved" && clip) {
       await tx.clip.update({
         where: { id: clip.id },
         data: { transcodeStatus: "COMPLETED", hlsUrl, thumbnailUrl: thumbnailUrl!, thumbnailBlurUrl },
       });
-    } else if (clip.transcodeStatus !== "COMPLETED") {
+      await tx.activeUpload.updateMany({
+        where: {
+          clipId: clip.id,
+          status: { in: ["COMPLETING", "ASSEMBLED", "FINALIZED"] },
+        },
+        data: { status: "PUBLISHED" },
+      });
+    } else if (event === "Saved" && photoResponse) {
+      await tx.photoResponse.update({
+        where: { id: photoResponse.id },
+        data: { transcodeStatus: "COMPLETED", hlsUrl, thumbnailUrl, thumbnailBlurUrl },
+      });
+    } else if (clip && clip.transcodeStatus !== "COMPLETED") {
       const attempts = clip.transcodeAttempts + 1;
       await tx.clip.update({
         where: { id: clip.id },
         data: { transcodeStatus: attempts >= 3 ? "FAILED_PERMANENTLY" : "FAILED", transcodeAttempts: attempts },
+      });
+    } else if (photoResponse && (
+      photoResponse.transcodeStatus !== "COMPLETED"
+      || !photoResponse.thumbnailUrl
+      || !photoResponse.thumbnailBlurUrl
+    )) {
+      const attempts = photoResponse.transcodeAttempts + 1;
+      await tx.photoResponse.update({
+        where: { id: photoResponse.id },
+        data: photoResponse.transcodeStatus === "COMPLETED"
+          ? { transcodeAttempts: attempts }
+          : { transcodeStatus: attempts >= 3 ? "FAILED_PERMANENTLY" : "FAILED", transcodeAttempts: attempts },
       });
     }
     return true;
@@ -142,7 +183,7 @@ async function POSTHandler(req: NextRequest) {
 
   if (!applied) return NextResponse.json({ success: true, replay: true });
 
-  if (event === "Saved" && clip.transcodeStatus !== "COMPLETED") {
+  if (event === "Saved" && clip && clip.transcodeStatus !== "COMPLETED") {
     const [poster, group, members] = await Promise.all([
       db.user.findUnique({ where: { id: clip.userId }, select: { name: true, handle: true } }),
       db.group.findUnique({ where: { id: clip.groupId }, select: { name: true } }),
@@ -150,8 +191,32 @@ async function POSTHandler(req: NextRequest) {
     ]);
     const posterName = poster?.name || (poster?.handle ? `@${poster.handle}` : undefined);
     await Promise.allSettled(members.map((member) => sendPushToUser(member.userId, member.userId === clip.userId
-      ? { category: "posts", key: "ownMomentReady", url: "/today" }
-      : { category: "posts", key: "newMomentReady", vars: { actor: posterName, group: group?.name }, url: "/today" })));
+      ? { category: "posts", key: "ownMomentReady", deepLink: { screen: "today", groupId: clip.groupId, clipId: clip.id } }
+      : { category: "posts", key: "newMomentReady", vars: { actor: posterName, group: group?.name }, deepLink: { screen: "today", groupId: clip.groupId, clipId: clip.id } })));
+  }
+
+  if (event === "Saved" && photoResponse && photoResponse.transcodeStatus !== "COMPLETED") {
+    const [targetClip, responder] = await Promise.all([
+      db.clip.findUnique({
+        where: { id: photoResponse.clipId },
+        include: { group: { select: { name: true } }, user: { select: { id: true } } },
+      }),
+      db.user.findUnique({ where: { id: photoResponse.userId }, select: { name: true } }),
+    ]);
+    if (targetClip && targetClip.userId !== photoResponse.userId) {
+      await sendPushToUser(targetClip.userId, {
+        category: "interactions",
+        key: "photoResponse",
+        vars: { actor: responder?.name, group: targetClip.group.name },
+        deepLink: {
+          screen: "today",
+          groupId: targetClip.groupId,
+          clipId: targetClip.id,
+          focus: "responses",
+          itemId: photoResponse.id,
+        },
+      });
+    }
   }
 
   return NextResponse.json({ success: true });

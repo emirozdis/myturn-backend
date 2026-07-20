@@ -209,7 +209,6 @@ model GroupBoost {
   group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
   user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@unique([groupId, userId])
   @@index([groupId])
   @@index([userId])
   @@map("group_boosts")
@@ -237,9 +236,10 @@ model GroupMember {
 }
 
 model Prompt {
-  id        String   @id @default(uuid())
-  text      String   @unique
-  createdAt DateTime @default(now())
+  id           String   @id @default(uuid())
+  text         String   @unique
+  translations Json     @default("{}")
+  createdAt    DateTime @default(now())
 
   @@map("prompts")
 }
@@ -424,12 +424,19 @@ model MediaUploadGrant {
 }
 
 model PhotoResponse {
-  id        String   @id @default(uuid())
-  clipId    String
-  userId    String
-  imageUrl  String
-  mediaType String   @default("photo") // Determines if it's a photo or a snippet video
-  createdAt DateTime @default(now())
+  id                  String    @id @default(uuid())
+  clipId              String
+  userId              String
+  imageUrl            String
+  hlsUrl              String?
+  thumbnailUrl        String?
+  thumbnailBlurUrl    String?
+  transcodeStatus     String    @default("COMPLETED")
+  transcodeAttempts   Int       @default(0)
+  transcodeJobId      String?   @unique
+  transcodeDispatchAt DateTime?
+  mediaType           String    @default("photo") // Determines if it's a photo or a snippet video
+  createdAt           DateTime  @default(now())
 
   clip Clip @relation(fields: [clipId], references: [id], onDelete: Cascade)
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)

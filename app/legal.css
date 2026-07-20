@@ -135,6 +135,9 @@ h1 { margin: 12px 0 18px; max-width: 830px; font-size: clamp(2.65rem, 7vw, 4.5re
 }
 .button:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.08); }
 .button:disabled { cursor: wait; opacity: 0.55; }
+.invite-card { max-width: 620px; }
+.invite-open-button { display: inline-flex; margin-top: 8px; color: #211006; text-decoration: none; }
+.invite-open-button:hover { color: #211006; }
 .danger-button { background: #ff6568; color: #260607; }
 .status { padding: 12px 14px; border-radius: 10px; background: #151515; color: #d0d0d0; line-height: 1.5; }
 .status.error { border: 1px solid #7b3034; color: #ffb9bc; }

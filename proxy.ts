@@ -65,6 +65,17 @@ export async function proxy(req: NextRequest) {
     return NextResponse.next();
   }
 
+  // These two endpoints run in the system browser and receive Google's OAuth
+  // redirect, so they cannot carry the native app's App Check header. The
+  // session exchange remains App Check protected and is bound to the app with
+  // a one-time PKCE challenge.
+  if (
+    req.nextUrl.pathname === "/api/auth/mobile/google/start" ||
+    req.nextUrl.pathname === "/api/auth/mobile/google/callback"
+  ) {
+    return NextResponse.next();
+  }
+
   return protectUserApi(req);
 }
 

@@ -1,7 +1,12 @@
 import { db } from "@/lib/db";
 import { cert, getApps, initializeApp } from "firebase-admin/app";
 import { getMessaging } from "firebase-admin/messaging";
-import { getNotificationCopy, NotificationCategory, NotificationRequest } from "@/lib/notifications";
+import {
+  getNotificationText,
+  createNotificationDeepLink,
+  NotificationCategory,
+  NotificationRequest,
+} from "@/lib/notification-texts";
 import { logInfo, reportError, reportWarning } from "@/lib/observability/logger";
 
 const activeApps = getApps();
@@ -134,7 +139,10 @@ export async function sendPushToUser(
       return { success: true, message: "Target user has no registered active devices." };
     }
 
-    const payload = { ...getNotificationCopy(user.locale, request.key, request.vars), url: request.url };
+    const payload = {
+      ...getNotificationText(user.locale, request.key, request.vars),
+      url: createNotificationDeepLink(request.deepLink),
+    };
     const tasks = user.pushSubscriptions.map((sub) =>
       sendPushNotification(sub.token, payload)
     );

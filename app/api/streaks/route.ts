@@ -6,7 +6,7 @@ import { getAuthSession } from "@/lib/auth";
 import { getVibeArchetype } from "@/lib/vibe";
 import { generateEdgeUrl } from "@/lib/media-signing";
 import { generateMissingThumbnails } from "@/lib/transcoder";
-import { hlsSafeResponses, publicClipPlaybackUrl } from "@/lib/media-delivery";
+import { hlsSafeResponses, publicClipPlaybackUrl, publicResponseMediaUrls } from "@/lib/media-delivery";
 import { checkUserProStatus, isArchiveLocked } from "../../../lib/pro-helper";
 import { getBusinessClock } from "@/lib/business-time";
 
@@ -147,14 +147,7 @@ async function GETHandler(req: NextRequest) {
                 ? thumbnailBlurTarget 
                 : generateEdgeUrl("vlogs", thumbnailBlurTarget, 3600, clip.storageTier);
 
-              activeClip.photoResponses = hlsSafeResponses(activeClip.photoResponses);
-              if (activeClip.photoResponses) {
-                for (const pr of activeClip.photoResponses) {
-                  if (!pr.imageUrl.startsWith("http") && !pr.imageUrl.startsWith("/")) {
-                    pr.imageUrl = generateEdgeUrl("vlogs", pr.imageUrl, 3600, clip.storageTier);
-                  }
-                }
-              }
+              activeClip.photoResponses = publicResponseMediaUrls(hlsSafeResponses(activeClip.photoResponses), clip.storageTier);
 
               return {
                 ...activeClip,

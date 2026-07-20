@@ -63,12 +63,14 @@ async function GETHandler() {
             id: gm.user.id,
             name: gm.user.name,
             image: memberAvatar,
+            role: gm.role,
           };
         }),
         lastVlogAt: m.group.clips[0]?.recordedAt.toISOString() || null,
         inviteCode: m.group.inviteCode,
         boostCount: m.group.boosts?.length || 0,
         hasBoosted: m.group.boosts?.some((b) => b.userId === userId) || false,
+        userBoostCount: m.group.boosts?.filter((b) => b.userId === userId).length || 0,
         boosters: m.group.boosts?.map(b => {
           let boosterAvatar = b.user.image;
           if (boosterAvatar && !boosterAvatar.startsWith('http')) {
@@ -193,7 +195,12 @@ async function GETHandler() {
     ];
 
     const suggestionsRaw = await db.user.findMany({
-      where: { id: { notIn: excludeIds } },
+      where: {
+        id: { notIn: excludeIds },
+        groupMembers: {
+          some: { groupId: { in: sharedGroupIds } },
+        },
+      },
       select: { id: true, name: true, image: true },
       take: 8,
     });
@@ -304,7 +311,7 @@ async function POSTHandler(req: NextRequest) {
         return NextResponse.json({ error: "Bu kullanıcıyla zaten bir arkadaşlığınız veya bekleyen bir isteğiniz var." }, { status: 400 });
       }
 
-      await db.friendship.create({
+      const friendship = await db.friendship.create({
         data: {
           requesterId: session.user.id,
           addresseeId: resolvedTargetUserId,
@@ -317,7 +324,7 @@ async function POSTHandler(req: NextRequest) {
         category: "social",
         key: "friendRequest",
         vars: { actor: requester?.name },
-        url: "/social"
+        deepLink: { screen: "social", focus: "friendRequests", itemId: friendship.id, userId: session.user.id }
       });
 
       return NextResponse.json({ success: true });
@@ -346,7 +353,7 @@ async function POSTHandler(req: NextRequest) {
           category: "social",
           key: "friendAccepted",
           vars: { actor: addressee?.name },
-          url: "/social"
+          deepLink: { screen: "social", focus: "profile", itemId: request.id, userId: session.user.id }
         });
       } else {
         await db.friendship.delete({

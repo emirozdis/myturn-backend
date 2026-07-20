@@ -6,6 +6,7 @@ import path from "path";
 import os from "os";
 import { randomUUID } from "crypto";
 import { logInfo, reportError, reportWarning } from "@/lib/observability/logger";
+import type { RecordingComposition } from "@/lib/recording-composition";
 
 const TRANSCODER_API_KEY = process.env.TRANSCODER_API_KEY || "";
 const NEXT_PUBLIC_APP_URL = process.env.NEXT_PUBLIC_APP_URL || process.env.NEXTAUTH_URL || "https://myturn.app";
@@ -87,7 +88,9 @@ export async function startTranscodeJob(
   outputHlsDir: string,
   thumbnailKey?: string,
   blurKey?: string,
-  facingMode: "user" | "environment" = "user"
+  facingMode: "user" | "environment" = "user",
+  composition?: RecordingComposition,
+  callbackPayload?: Record<string, string>,
 ): Promise<string> {
   if (!TRANSCODER_API_KEY) {
     throw new Error("Missing TRANSCODER_API_KEY in environment variables.");
@@ -105,13 +108,14 @@ export async function startTranscodeJob(
     thumbnailKey: thumbnailKey ? getPhysicalKey(thumbnailKey) : undefined,
     blurKey: blurKey ? getPhysicalKey(blurKey) : undefined,
     webhookUrl,
-    webhookPayload: JSON.stringify({ clipId }),
+    webhookPayload: JSON.stringify(callbackPayload || { clipId }),
     options: {
       generateHls: true,
       generateThumbnail: !!thumbnailKey,
       generateBlur: !!blurKey,
       facingMode,
       thumbnailTime: 0.5,
+      composition,
     }
   };
 

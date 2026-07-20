@@ -17,11 +17,30 @@ export function publicClipPlaybackUrl(clip: DeliverableClip, hlsUrl: string | nu
     : generateEdgeUrl("vlogs", clip.videoUrl, 3600, clip.storageTier);
 }
 
-/**
- * Video responses currently have only a raw MP4 object and therefore cannot
- * be delivered under the HLS-only playback policy. Keep photo responses while
- * excluding legacy video responses until they have an HLS rendition.
- */
-export function hlsSafeResponses<T extends { mediaType?: string | null }>(responses: T[] | null | undefined): T[] {
+/** Photo responses are image-only; legacy snippet responses stay private. */
+export function hlsSafeResponses<T extends {
+  imageUrl: string;
+  hlsUrl?: string | null;
+  mediaType?: string | null;
+  transcodeStatus?: string | null;
+}>(responses: T[] | null | undefined): T[] {
   return (responses || []).filter((response) => !response.mediaType || response.mediaType === "photo");
+}
+
+/** Sign every public-facing response asset without exposing the raw snippet upload. */
+export function publicResponseMediaUrls<T extends {
+  imageUrl: string;
+  thumbnailUrl?: string | null;
+  thumbnailBlurUrl?: string | null;
+}>(responses: T[], storageTier: string): T[] {
+  const publicUrl = (value: string) => value.startsWith("http") || value.startsWith("/")
+    ? value
+    : generateEdgeUrl("vlogs", value, 3600, storageTier);
+
+  return responses.map((response) => ({
+    ...response,
+    imageUrl: publicUrl(response.imageUrl),
+    thumbnailUrl: response.thumbnailUrl ? publicUrl(response.thumbnailUrl) : response.thumbnailUrl,
+    thumbnailBlurUrl: response.thumbnailBlurUrl ? publicUrl(response.thumbnailBlurUrl) : response.thumbnailBlurUrl,
+  }));
 }

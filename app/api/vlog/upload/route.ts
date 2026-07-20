@@ -15,9 +15,10 @@ import { db } from "@/lib/db";
 import { getAuthSession } from "@/lib/auth";
 import { r2, r2Client } from "@/lib/r2";
 import { rateLimit } from "@/lib/rate-limit";
-import { getLocalDateInTimezone } from "@/lib/vlog-helpers";
+import { getLocalDateInTimezone, MIN_MEMBERS_FOR_DAILY_ASSIGNMENT } from "@/lib/vlog-helpers";
 import { finalizeUploadedClip as completeUpload } from "@/lib/upload-finalization";
 import { Prisma } from "@prisma/client";
+import { validateRecordingMetadata } from "@/lib/recording-composition";
 
 const BUCKET_NAME = process.env.CLOUDFLARE_R2_BUCKET_NAME || "vlogs";
 const CHUNK_SIZE = 5 * 1024 * 1024;
@@ -79,7 +80,18 @@ async function POSTHandler(req: NextRequest) {
     if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const body = await req.json();
-    const { action, groupId, assignmentId, location, caption, metadata, mediaType, uploadId, clipId } = body || {};
+    const { action, groupId, assignmentId, location, caption, metadata, mediaType, uploadId, clipId, responseId } = body || {};
+
+    if (action === "response-status") {
+      if (typeof responseId !== "string") return NextResponse.json({ error: "Missing response ID." }, { status: 400 });
+      const response = await db.photoResponse.findFirst({
+        where: { id: responseId, userId: session.user.id },
+        select: { id: true, clipId: true, transcodeStatus: true },
+      });
+      return response
+        ? NextResponse.json({ success: true, response })
+        : NextResponse.json({ error: "Response not found." }, { status: 404 });
+    }
 
     if (action === "clip-status") {
       if (typeof clipId !== "string") return NextResponse.json({ error: "Missing clipId." }, { status: 400 });
@@ -87,6 +99,12 @@ async function POSTHandler(req: NextRequest) {
         where: { id: clipId, userId: session.user.id },
         select: { id: true, transcodeStatus: true, mediaType: true },
       });
+      if (clip?.transcodeStatus === "COMPLETED") {
+        await db.activeUpload.updateMany({
+          where: { clipId: clip.id, userId: session.user.id, status: "FINALIZED" },
+          data: { status: "PUBLISHED" },
+        });
+      }
       return clip
         ? NextResponse.json({ success: true, clip })
         : NextResponse.json({ error: "Clip not found." }, { status: 404 });
@@ -142,20 +160,29 @@ async function POSTHandler(req: NextRequest) {
       if ((metadata && (typeof metadata !== "string" || metadata.length > 10_000)) || (location && (typeof location !== "string" || location.length > 200)) || (caption && (typeof caption !== "string" || caption.length > 500))) {
         return NextResponse.json({ error: "Upload metadata is too large." }, { status: 400 });
       }
+      let validatedMetadata: ReturnType<typeof validateRecordingMetadata>;
+      try {
+        validatedMetadata = validateRecordingMetadata(metadata, expectedBytesNumber, resolvedMediaType);
+      } catch (error) {
+        return NextResponse.json({ error: error instanceof Error ? error.message : "Upload metadata is invalid." }, { status: 400 });
+      }
       if (typeof groupId !== "string" || typeof assignmentId !== "string") {
         return NextResponse.json({ error: "Missing group or assignment." }, { status: 400 });
       }
 
-      const assignment = await db.dailyAssignment.findFirst({
-        where: {
-          id: assignmentId,
-          groupId,
-          userId: session.user.id,
-          group: { members: { some: { userId: session.user.id } } },
-        },
-        include: { group: true },
-      });
-      if (!assignment || assignment.group.isFrozen || assignment.isPassed || !["active", "completed"].includes(assignment.status)) {
+      const [assignment, memberCount] = await Promise.all([
+        db.dailyAssignment.findFirst({
+          where: {
+            id: assignmentId,
+            groupId,
+            userId: session.user.id,
+            group: { members: { some: { userId: session.user.id } } },
+          },
+          include: { group: true },
+        }),
+        db.groupMember.count({ where: { groupId } }),
+      ]);
+      if (!assignment || memberCount < MIN_MEMBERS_FOR_DAILY_ASSIGNMENT || assignment.group.isFrozen || assignment.isPassed || !["active", "completed"].includes(assignment.status)) {
         return NextResponse.json({ error: "This assignment is not uploadable." }, { status: 403 });
       }
       const localDate = (await getLocalDateInTimezone(assignment.group.timezone)).toISOString().slice(0, 10);
@@ -166,7 +193,11 @@ async function POSTHandler(req: NextRequest) {
       const mediaId = randomUUID();
       const newClipId = randomUUID();
       const ext = resolvedMediaType === "photo" ? "jpg" : "mp4";
-      const contentType = resolvedMediaType === "photo" ? "image/jpeg" : "video/mp4";
+      const contentType = resolvedMediaType === "photo"
+        ? "image/jpeg"
+        : validatedMetadata.segmented
+          ? "application/octet-stream"
+          : "video/mp4";
       const rawKey = `${groupId}/${assignmentId}/${mediaId}-media.${ext}`;
       const physicalKey = process.env.CLOUDFLARE_R2_BUCKET_NAME ? `vlogs/${rawKey}` : rawKey;
       const initiated = await r2Client.send(new CreateMultipartUploadCommand({ Bucket: BUCKET_NAME, Key: physicalKey, ContentType: contentType }));
@@ -176,6 +207,10 @@ async function POSTHandler(req: NextRequest) {
       const expiresAt = new Date(Date.now() + UPLOAD_TTL_MS);
       try {
         await db.$transaction(async (tx) => {
+          const currentMemberCount = await tx.groupMember.count({ where: { groupId } });
+          if (currentMemberCount < MIN_MEMBERS_FOR_DAILY_ASSIGNMENT) {
+            throw new UploadInvariantError("At least two group members are required to vlog.", 409);
+          }
           const currentAssignment = await tx.dailyAssignment.findFirst({
             where: {
               id: assignmentId,
@@ -212,7 +247,7 @@ async function POSTHandler(req: NextRequest) {
               expiresAt,
               location: location || null,
               caption: caption || null,
-              metadata: metadata || null,
+              metadata: validatedMetadata.serialized,
             },
           });
         }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
@@ -320,8 +355,15 @@ async function POSTHandler(req: NextRequest) {
           details: { clipId: clip.id },
         });
       }
-      await db.activeUpload.updateMany({ where: { id: upload.id }, data: { status: "FINALIZED" } });
       const refreshed = await db.clip.findUnique({ where: { id: clip.id } });
+      const uploadStatus = refreshed?.transcodeStatus === "COMPLETED" ? "PUBLISHED" : "FINALIZED";
+      await db.activeUpload.updateMany({
+        where: {
+          id: upload.id,
+          status: { in: ["COMPLETING", "ASSEMBLED", "FINALIZED"] },
+        },
+        data: { status: uploadStatus },
+      });
       const publicClip = refreshed
         ? {
             ...refreshed,
