@@ -54,6 +54,12 @@ async function protectUserApi(req: NextRequest) {
 }
 
 export async function proxy(req: NextRequest) {
+  // Scheduled invocations cannot carry a Firebase App Check token. This route
+  // authenticates independently with CRON_API_KEY via the x-api-key header.
+  if (req.nextUrl.pathname === "/api/cron") {
+    return NextResponse.next();
+  }
+
   // The current privacy notice must remain readable before sign-in and when a
   // user cannot obtain an App Check token. It contains no user-specific data.
   if (req.nextUrl.pathname === "/api/legal/privacy") {
