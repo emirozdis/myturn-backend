@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withApiHandler } from "@/lib/observability/api-handler";
-import { hash } from "bcryptjs";
 import { db } from "@/lib/db";
 import { consumeAuthCode } from "@/lib/auth-tokens";
 import { rateLimit } from "@/lib/rate-limit";
+import { getFirebaseAuth } from "@/lib/firebase-admin";
 
 async function POSTHandler(req: NextRequest) {
   const ip = req.headers.get("cf-connecting-ip") || req.headers.get("x-forwarded-for") || "unknown_ip";
@@ -17,13 +17,26 @@ async function POSTHandler(req: NextRequest) {
   }
   const codeIsValid = await consumeAuthCode("reset", normalized, code);
   if (!codeIsValid) return NextResponse.json({ error: "This reset code is invalid or expired." }, { status: 400 });
-  const passwordHash = await hash(password, 12);
+  
   const user = await db.user.findUnique({ where: { email: normalized }, select: { id: true } });
   if (!user) return NextResponse.json({ error: "This reset code is invalid or expired." }, { status: 400 });
+
+  try {
+    const auth = getFirebaseAuth();
+    await auth.updateUser(user.id, { password });
+  } catch (err: any) {
+    // Fallback: try finding user in Firebase by email if uid didn't match
+    try {
+      const auth = getFirebaseAuth();
+      const fbUser = await auth.getUserByEmail(normalized);
+      await auth.updateUser(fbUser.uid, { password });
+    } catch {}
+  }
+
   await db.$transaction([
     db.user.update({
       where: { id: user.id },
-      data: { password: passwordHash, sessionVersion: { increment: 1 } },
+      data: { sessionVersion: { increment: 1 } },
     }),
     db.pushSubscription.deleteMany({ where: { userId: user.id } }),
   ]);

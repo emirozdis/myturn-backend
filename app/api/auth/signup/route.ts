@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withApiHandler } from "@/lib/observability/api-handler";
-import { hash } from "bcryptjs";
 import { db } from "@/lib/db";
 import { rateLimit } from "@/lib/rate-limit";
 import { issueAuthCode } from "@/lib/auth-tokens";
 import { sendVerificationEmail } from "@/lib/email";
 import { CURRENT_AGREEMENT_CONTENT, CURRENT_AGREEMENT } from "@/lib/legal-copy";
 import { CURRENT_AGREEMENT_HASH } from "@/lib/legal-agreements";
+import { getFirebaseAuth } from "@/lib/firebase-admin";
 
 async function POSTHandler(req: NextRequest) {
   try {
@@ -16,7 +16,7 @@ async function POSTHandler(req: NextRequest) {
     const rl = rateLimit(`signup_${ip}`, 5, 3600 * 1000);
     if (!rl.success) {
       return NextResponse.json(
-        { error: `Too many registration attempts. Please try again later.` },
+        { error: "Too many registration attempts. Please try again later." },
         { status: 429 }
       );
     }
@@ -70,13 +70,31 @@ async function POSTHandler(req: NextRequest) {
       );
     }
 
-    const hashedPassword = await hash(password, 12);
+    // Create User in Firebase Authentication
+    let firebaseUser;
+    try {
+      const auth = getFirebaseAuth();
+      firebaseUser = await auth.createUser({
+        email: emailNormalized,
+        password: password,
+        displayName: name,
+      });
+    } catch (fbError: any) {
+      if (fbError.code === "auth/email-already-in-use") {
+        return NextResponse.json(
+          { error: "A user with this email already exists in Firebase Auth." },
+          { status: 400 }
+        );
+      }
+      throw fbError;
+    }
 
+    // Create User in Prisma database mapping to Firebase UID
     const user = await db.user.create({
       data: {
+        id: firebaseUser.uid,
         name,
         email: emailNormalized,
-        password: hashedPassword,
         agreementAcceptances: {
           create: {
             agreementSlug: CURRENT_AGREEMENT.slug,
@@ -98,6 +116,9 @@ async function POSTHandler(req: NextRequest) {
     } catch (emailError) {
       await db.verificationToken.deleteMany({ where: { identifier: `verify:${emailNormalized}` } });
       await db.user.delete({ where: { id: user.id } });
+      try {
+        await getFirebaseAuth().deleteUser(firebaseUser.uid);
+      } catch {}
       throw emailError;
     }
 

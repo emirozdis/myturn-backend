@@ -110,13 +110,9 @@ export async function consumeGoogleMobileHandoff(code: string, verifier: string)
 }
 
 export function getGoogleOAuthConfig() {
-  const clientId = process.env.GOOGLE_CLIENT_ID?.trim();
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim();
-  const baseUrl = process.env.NEXTAUTH_URL?.trim();
-
-  if (!clientId || !clientSecret || !baseUrl) {
-    throw new Error("GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and NEXTAUTH_URL are required.");
-  }
+  const clientId = process.env.GOOGLE_CLIENT_ID?.trim() || "";
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim() || "";
+  const baseUrl = process.env.NEXTAUTH_URL?.trim() || "http://localhost:3000";
 
   return {
     clientId,

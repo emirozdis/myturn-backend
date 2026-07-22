@@ -1,4 +1,5 @@
 import { cert, getApp, getApps, initializeApp } from "firebase-admin/app";
+import { getAuth } from "firebase-admin/auth";
 
 export function getFirebaseAdminApp() {
   if (getApps().length > 0) {
@@ -17,3 +18,8 @@ export function getFirebaseAdminApp() {
     credential: cert({ projectId, clientEmail, privateKey }),
   });
 }
+
+export function getFirebaseAuth() {
+  return getAuth(getFirebaseAdminApp());
+}
+
