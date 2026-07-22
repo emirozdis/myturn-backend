@@ -23,34 +23,30 @@ export async function verifyFirebaseIdToken(token: string) {
   }
 }
 
+// lib/auth.ts (DEBUG VERSION)
 export async function getAuthSession(): Promise<Session | null> {
   try {
     const reqHeaders = await headers();
     const reqCookies = await cookies();
 
     let token: string | null = null;
-
-    // Check Authorization header (Bearer <token>)
     const authHeader = reqHeaders.get("authorization");
     if (authHeader && authHeader.startsWith("Bearer ")) {
       token = authHeader.substring(7).trim();
     }
 
-    // Fallback to cookie check (firebase_session, next-auth.session-token, etc.)
     if (!token) {
-      token =
-        reqCookies.get("firebase_session")?.value ||
-        reqCookies.get("next-auth.session-token")?.value ||
-        reqCookies.get("__Secure-next-auth.session-token")?.value ||
-        null;
+      token = reqCookies.get("firebase_session")?.value || null;
     }
 
     if (!token) {
+      console.log("[AUTH DEBUG] No token found in Authorization header or cookie.");
       return null;
     }
 
     const decodedToken = await verifyFirebaseIdToken(token);
     if (!decodedToken) {
+      console.log("[AUTH DEBUG] Firebase failed to verify token. Check Firebase project config or expired token.");
       return null;
     }
 
@@ -64,15 +60,10 @@ export async function getAuthSession(): Promise<Session | null> {
           ...(emailNormalized ? [{ email: emailNormalized }] : []),
         ],
       },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        image: true,
-      },
     });
 
     if (!user && emailNormalized) {
+      console.log("[AUTH DEBUG] User not found in DB. Creating new user record...");
       user = await prisma.user.create({
         data: {
           id: uid,
@@ -81,20 +72,13 @@ export async function getAuthSession(): Promise<Session | null> {
           image: decodedToken.picture || null,
           emailVerified: decodedToken.email_verified ? new Date() : null,
         },
-        select: {
-          id: true,
-          email: true,
-          name: true,
-          image: true,
-        },
       });
     }
 
     if (!user) {
+      console.log("[AUTH DEBUG] User record could not be found or created in Postgres DB.");
       return null;
     }
-
-    setLogContext({ userId: user.id });
 
     return {
       user: {
@@ -105,6 +89,7 @@ export async function getAuthSession(): Promise<Session | null> {
       },
     };
   } catch (err) {
+    console.error("[AUTH DEBUG] Error inside getAuthSession:", err);
     return null;
   }
 }
