@@ -1,7 +1,6 @@
 import { headers, cookies } from "next/headers";
 import { getFirebaseAuth } from "@/lib/firebase-admin";
 import { prisma } from "@/lib/prisma";
-import { setLogContext } from "@/lib/observability/request-context";
 
 export interface SessionUser {
   id: string;
@@ -23,7 +22,6 @@ export async function verifyFirebaseIdToken(token: string) {
   }
 }
 
-// lib/auth.ts (DEBUG VERSION)
 export async function getAuthSession(): Promise<Session | null> {
   try {
     const reqHeaders = await headers();
@@ -40,13 +38,11 @@ export async function getAuthSession(): Promise<Session | null> {
     }
 
     if (!token) {
-      console.log("[AUTH DEBUG] No token found in Authorization header or cookie.");
       return null;
     }
 
     const decodedToken = await verifyFirebaseIdToken(token);
     if (!decodedToken) {
-      console.log("[AUTH DEBUG] Firebase failed to verify token. Check Firebase project config or expired token.");
       return null;
     }
 
@@ -63,7 +59,6 @@ export async function getAuthSession(): Promise<Session | null> {
     });
 
     if (!user && emailNormalized) {
-      console.log("[AUTH DEBUG] User not found in DB. Creating new user record...");
       user = await prisma.user.create({
         data: {
           id: uid,
@@ -76,7 +71,6 @@ export async function getAuthSession(): Promise<Session | null> {
     }
 
     if (!user) {
-      console.log("[AUTH DEBUG] User record could not be found or created in Postgres DB.");
       return null;
     }
 
@@ -89,7 +83,7 @@ export async function getAuthSession(): Promise<Session | null> {
       },
     };
   } catch (err) {
-    console.error("[AUTH DEBUG] Error inside getAuthSession:", err);
+    console.error("[AUTH] Error inside getAuthSession:", err);
     return null;
   }
 }
