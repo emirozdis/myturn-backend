@@ -5,8 +5,17 @@ import { withApiHandler } from "@/lib/observability/api-handler";
 import { getFirebaseAuth } from "@/lib/firebase-admin";
 
 async function POSTHandler(req: NextRequest) {
-  const body = await req.json().catch(() => null);
-  const idToken = typeof body?.idToken === "string" ? body.idToken.trim() : "";
+  const rawBody = await req.json().catch(() => null);
+  const body = Array.isArray(rawBody) ? rawBody[0] : rawBody;
+  let idToken = typeof body?.idToken === "string" ? body.idToken.trim() : "";
+
+  // Fallback: Check Authorization header if not passed in body
+  if (!idToken) {
+    const authHeader = req.headers.get("authorization");
+    if (authHeader && authHeader.startsWith("Bearer ")) {
+      idToken = authHeader.substring(7).trim();
+    }
+  }
 
   const ip =
     req.headers.get("cf-connecting-ip") ||
