@@ -15,7 +15,7 @@ async function POSTHandler(req: NextRequest) {
       return new NextResponse("Unauthorized.", { status: 401 });
     }
 
-    const rl = rateLimit(`media_upload_${session.user.id}`, 10, 60000);
+    const rl = await rateLimit(`media_upload_${session.user.id}`, 10, 60000);
     if (!rl.success) {
       return new NextResponse(`Rate limit exceeded. Try again in ${rl.retryAfter}s.`, { status: 429 });
     }

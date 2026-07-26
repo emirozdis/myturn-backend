@@ -26,7 +26,7 @@ async function POSTHandler(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const rl = rateLimit(`feedback_${session.user.id}`, 5, 10 * 60_000);
+  const rl = await rateLimit(`feedback_${session.user.id}`, 5, 10 * 60_000);
   if (!rl.success) {
     return NextResponse.json(
       { error: `Too many feedback reports. Try again in ${rl.retryAfter}s.` },

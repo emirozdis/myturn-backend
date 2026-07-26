@@ -183,7 +183,7 @@ async function POSTHandler(req: NextRequest) {
     const { action, name, timezone = "UTC", image, inviteCode, groupId, targetUserId } = body;
 
     if (action === "create") {
-      const rl = rateLimit(`create_group_${session.user.id}`, 5, 60000);
+      const rl = await rateLimit(`create_group_${session.user.id}`, 5, 60000);
       if (!rl.success) {
         return NextResponse.json(
           { error: `Çok hızlı grup kuruyorsunuz. ${rl.retryAfter}s sonra tekrar deneyin.` },
@@ -259,7 +259,7 @@ async function POSTHandler(req: NextRequest) {
     if (action === "rotateInviteCode") {
       if (!groupId) return NextResponse.json({ error: "Missing groupId" }, { status: 400 });
 
-      const rl = rateLimit(`rotate_group_invite_${session.user.id}`, 5, 60000);
+      const rl = await rateLimit(`rotate_group_invite_${session.user.id}`, 5, 60000);
       if (!rl.success) {
         return NextResponse.json(
           { error: `Davet kodunu çok sık yeniliyorsunuz. ${rl.retryAfter}s sonra tekrar deneyin.` },
@@ -296,7 +296,7 @@ async function POSTHandler(req: NextRequest) {
         return NextResponse.json({ error: "You are already the group leader." }, { status: 400 });
       }
 
-      const rl = rateLimit(`transfer_group_leadership_${session.user.id}`, 5, 60000);
+      const rl = await rateLimit(`transfer_group_leadership_${session.user.id}`, 5, 60000);
       if (!rl.success) {
         return NextResponse.json({ error: `Too many leadership changes. Try again in ${rl.retryAfter}s.` }, { status: 429 });
       }
@@ -324,7 +324,7 @@ async function POSTHandler(req: NextRequest) {
         return NextResponse.json({ error: "Use Leave group to remove yourself." }, { status: 400 });
       }
 
-      const rl = rateLimit(`kick_group_member_${session.user.id}`, 10, 60000);
+      const rl = await rateLimit(`kick_group_member_${session.user.id}`, 10, 60000);
       if (!rl.success) {
         return NextResponse.json({ error: `You are removing members too fast. Try again in ${rl.retryAfter}s.` }, { status: 429 });
       }
@@ -358,7 +358,7 @@ async function POSTHandler(req: NextRequest) {
     if (action === "deleteGroup") {
       if (!groupId) return NextResponse.json({ error: "Missing groupId." }, { status: 400 });
 
-      const rl = rateLimit(`delete_group_${session.user.id}`, 5, 60000);
+      const rl = await rateLimit(`delete_group_${session.user.id}`, 5, 60000);
       if (!rl.success) {
         return NextResponse.json({ error: `You are deleting groups too fast. Try again in ${rl.retryAfter}s.` }, { status: 429 });
       }
@@ -380,7 +380,7 @@ async function POSTHandler(req: NextRequest) {
         return NextResponse.json({ error: "Davet kodu zorunludur." }, { status: 400 });
       }
 
-      const rl = rateLimit(`join_group_${session.user.id}`, 10, 60000);
+      const rl = await rateLimit(`join_group_${session.user.id}`, 10, 60000);
       if (!rl.success) {
         return NextResponse.json(
           { error: `Çok hızlı katılıyorsunuz. ${rl.retryAfter}s sonra tekrar deneyin.` },
@@ -451,7 +451,7 @@ async function DELETEHandler(req: NextRequest) {
       return NextResponse.json({ error: "Missing groupId parameter." }, { status: 400 });
     }
 
-    const rl = rateLimit(`leave_group_${session.user.id}`, 10, 60000);
+    const rl = await rateLimit(`leave_group_${session.user.id}`, 10, 60000);
     if (!rl.success) {
       return NextResponse.json(
         { error: `You are leaving groups too fast. Try again in ${rl.retryAfter}s.` },

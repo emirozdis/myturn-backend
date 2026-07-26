@@ -22,7 +22,7 @@ async function POSTHandler(req: NextRequest) {
     req.headers.get("x-forwarded-for") ||
     "unknown_ip";
 
-  const rl = rateLimit(`mobile_login_${ip}`, 10, 15 * 60 * 1000);
+  const rl = await rateLimit(`mobile_login_${ip}`, 10, 15 * 60 * 1000);
   if (!rl.success) {
     return NextResponse.json(
       { error: "Too many login attempts. Please try again later." },
@@ -39,7 +39,7 @@ async function POSTHandler(req: NextRequest) {
 
   let decodedToken = null;
   try {
-    decodedToken = await getFirebaseAuth().verifyIdToken(idToken);
+    decodedToken = await getFirebaseAuth().verifyIdToken(idToken, true);
   } catch {
     return NextResponse.json(
       { error: "Invalid or expired Firebase authentication token." },
@@ -50,20 +50,15 @@ async function POSTHandler(req: NextRequest) {
   const userEmail = decodedToken?.email ? decodedToken.email.toLowerCase().trim() : null;
   const uid = decodedToken?.uid;
 
-  if (!uid) {
+  if (!uid || !userEmail || decodedToken.email_verified !== true) {
     return NextResponse.json(
-      { error: "Firebase token does not contain a valid user ID." },
-      { status: 400 }
+      { error: "A verified Firebase identity is required." },
+      { status: 403 }
     );
   }
 
-  let user = await db.user.findFirst({
-    where: {
-      OR: [
-        { id: uid },
-        ...(userEmail ? [{ email: userEmail }] : []),
-      ],
-    },
+  const profile = await db.profile.findUnique({
+    where: { id: uid },
     select: {
       id: true,
       email: true,
@@ -72,47 +67,21 @@ async function POSTHandler(req: NextRequest) {
     },
   });
 
-  if (!user && userEmail) {
-    user = await db.user.create({
-      data: {
-        id: uid,
-        email: userEmail,
-        name: decodedToken.name || userEmail.split("@")[0],
-        image: decodedToken.picture || null,
-      },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        image: true,
-      },
-    });
-  }
-
-  if (!user) {
+  if (!profile || profile.email?.toLowerCase().trim() !== userEmail) {
     return NextResponse.json(
-      { error: "Account not found." },
-      { status: 404 }
+      { error: "Account is not provisioned." },
+      { status: 403 }
     );
   }
 
   const response = NextResponse.json({
     success: true,
-    sessionToken: idToken,
     user: {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      image: user.image,
+      id: profile.id,
+      email: profile.email,
+      name: profile.name,
+      image: profile.image,
     },
-  });
-
-  response.cookies.set("firebase_session", idToken, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NEXTAUTH_URL?.startsWith("https://") === true,
-    path: "/",
-    maxAge: 30 * 24 * 60 * 60,
   });
 
   response.headers.set("Cache-Control", "no-store");

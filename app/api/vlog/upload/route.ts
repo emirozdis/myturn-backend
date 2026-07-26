@@ -125,7 +125,7 @@ async function POSTHandler(req: NextRequest) {
     }
 
     if (action === "initiate") {
-      const rl = rateLimit(`initiate_upload_${session.user.id}`, 10, 60_000);
+      const rl = await rateLimit(`initiate_upload_${session.user.id}`, 10, 60_000);
       if (!rl.success) return NextResponse.json({ error: "Too many upload attempts." }, { status: 429 });
 
       const expiredUploads = await db.activeUpload.findMany({

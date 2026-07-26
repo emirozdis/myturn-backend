@@ -125,7 +125,7 @@ class AwsV4Signer {
     if (this.service === 's3') {
       try {
         this.encodedPath = decodeURIComponent(this.url.pathname.replace(/\+/g, ' '));
-      } catch (e) {
+      } catch {
         this.encodedPath = this.url.pathname;
       }
     } else {

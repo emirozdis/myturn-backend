@@ -35,7 +35,7 @@ const MAX_COMMENT_LENGTH = 500;
 const MAX_DAILY_COMMENTS = 100;
 
 async function getUserLocale(userId: string): Promise<string> {
-  const user = await db.user.findUnique({ where: { id: userId }, select: { locale: true } });
+  const user = await db.profile.findUnique({ where: { id: userId }, select: { locale: true } });
   return user?.locale || "en";
 }
 
@@ -585,7 +585,7 @@ async function POSTHandler(req: NextRequest) {
       /* Legacy single-object upload flow intentionally disabled.
       const { groupId, assignmentId, location, caption, duration, metadata, mediaType } = args;
 
-      const rl = rateLimit(`create_clip_${session.user.id}`, 5, 60000);
+      const rl = await rateLimit(`create_clip_${session.user.id}`, 5, 60000);
       if (!rl.success) return NextResponse.json({ error: `You're posting too fast! Try again in ${rl.retryAfter}s.` }, { status: 429 });
 
       const group = await db.group.findUnique({ where: { id: groupId }, include: { members: true } });
@@ -710,7 +710,7 @@ async function POSTHandler(req: NextRequest) {
       const updated = await claimCurrentAssignment(assignmentId, session.user.id);
       if (!updated) return NextResponse.json({ error: "Assignment was already claimed or is no longer available." }, { status: 409 });
 
-      const claimer = await db.user.findUnique({ where: { id: session.user.id } });
+      const claimer = await db.profile.findUnique({ where: { id: session.user.id } });
 
       for (const m of updated.group.members) {
         if (m.userId !== session.user.id) {
@@ -747,7 +747,7 @@ async function POSTHandler(req: NextRequest) {
         return NextResponse.json({ error: "Clip not found" }, { status: 404 });
       }
 
-      const responseUploadLimit = rateLimit(`response_upload_${session.user.id}`, 10, 60_000);
+      const responseUploadLimit = await rateLimit(`response_upload_${session.user.id}`, 10, 60_000);
       if (!responseUploadLimit.success) return NextResponse.json({ error: "Too many upload attempts." }, { status: 429 });
       if (mediaType !== undefined && mediaType !== "photo") {
         return NextResponse.json({ error: "Photo responses only support images." }, { status: 400 });
@@ -887,7 +887,7 @@ async function POSTHandler(req: NextRequest) {
 
     if (action === "addPhotoResponse") {
       const { clipId, path, mediaType } = args;
-      const rlPhoto = rateLimit(`photo_res_${session.user.id}`, 15, 60000);
+      const rlPhoto = await rateLimit(`photo_res_${session.user.id}`, 15, 60000);
       if (!rlPhoto.success) {
         return NextResponse.json({ error: `Lütfen tekrar denemeden önce biraz bekleyin.` }, { status: 429 });
       }
@@ -975,7 +975,7 @@ async function POSTHandler(req: NextRequest) {
         });
 
         if (photoResponse.mediaType === "photo" && targetClip && targetClip.userId !== session.user.id) {
-          const responder = await db.user.findUnique({ where: { id: session.user.id }, select: { name: true } });
+          const responder = await db.profile.findUnique({ where: { id: session.user.id }, select: { name: true } });
           await sendPushToUser(targetClip.userId, {
             category: "interactions",
             key: "photoResponse",
@@ -1002,7 +1002,7 @@ async function POSTHandler(req: NextRequest) {
       if (typeof assignmentId !== "string" || assignmentId.length < 8 || assignmentId.length > 128) {
         return NextResponse.json({ error: "Invalid assignment." }, { status: 400 });
       }
-      const rlPoke = rateLimit(`poke_${session.user.id}`, 20, 60000);
+      const rlPoke = await rateLimit(`poke_${session.user.id}`, 20, 60000);
       if (!rlPoke.success) {
         return NextResponse.json({ error: "Uygulama genelinde çok sık dürtü gönderiyorsunuz!" }, { status: 429 });
       }
@@ -1054,7 +1054,7 @@ async function POSTHandler(req: NextRequest) {
         }
       });
 
-      const poker = await db.user.findUnique({ where: { id: session.user.id } });
+      const poker = await db.profile.findUnique({ where: { id: session.user.id } });
       await sendPushToUser(assignment.userId, {
         category: "reminders",
         key: "poke",
@@ -1071,7 +1071,7 @@ async function POSTHandler(req: NextRequest) {
           typeof emoji !== "string" || !ALLOWED_REACTION_EMOJIS.has(emoji)) {
         return NextResponse.json({ error: "Invalid reaction." }, { status: 400 });
       }
-      const reactionLimit = rateLimit(`reaction_${session.user.id}`, 60, 60000);
+      const reactionLimit = await rateLimit(`reaction_${session.user.id}`, 60, 60000);
       if (!reactionLimit.success) {
         return NextResponse.json({ error: "Too many reactions. Please slow down." }, { status: 429 });
       }
@@ -1130,7 +1130,7 @@ async function POSTHandler(req: NextRequest) {
         });
 
         if (targetClip && targetClip.userId !== session.user.id) {
-          const reactor = await db.user.findUnique({ where: { id: session.user.id }, select: { name: true } });
+          const reactor = await db.profile.findUnique({ where: { id: session.user.id }, select: { name: true } });
           await sendPushToUser(targetClip.userId, {
             category: "interactions",
             key: "reaction",
@@ -1154,7 +1154,7 @@ async function POSTHandler(req: NextRequest) {
           (parentId !== null && (typeof parentId !== "string" || parentId.length < 8 || parentId.length > 128))) {
         return NextResponse.json({ error: `Comments must contain 1-${MAX_COMMENT_LENGTH} characters.` }, { status: 400 });
       }
-      const rlComm = rateLimit(`comment_${session.user.id}`, 15, 60000);
+      const rlComm = await rateLimit(`comment_${session.user.id}`, 15, 60000);
       if (!rlComm.success) {
         return NextResponse.json({ error: `Çok hızlı yorum yapıyorsunuz. Yavaşlayın! ${rlComm.retryAfter}s sonra tekrar deneyin.` }, { status: 429 });
       }
@@ -1262,7 +1262,7 @@ async function POSTHandler(req: NextRequest) {
       }
 
       try {
-        const commenter = await db.user.findUnique({
+        const commenter = await db.profile.findUnique({
           where: { id: session.user.id },
           select: { name: true, handle: true },
         });

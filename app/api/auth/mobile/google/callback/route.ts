@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { OAuth2Client } from "google-auth-library";
+import { withApiHandler } from "@/lib/observability/api-handler";
 import { db } from "@/lib/db";
 import { CURRENT_AGREEMENT, CURRENT_AGREEMENT_CONTENT } from "@/lib/legal-copy";
 import { CURRENT_AGREEMENT_HASH } from "@/lib/legal-agreements";
@@ -22,7 +23,7 @@ function clientIp(req: NextRequest) {
     .slice(0, 64);
 }
 
-export async function GET(req: NextRequest) {
+async function GETHandler(req: NextRequest) {
   if (!googleLoginEnabled()) return redirectError("google_disabled");
   if (req.nextUrl.searchParams.get("error")) return redirectError("google_cancelled");
 
@@ -57,8 +58,8 @@ export async function GET(req: NextRequest) {
       select: { userId: true },
     });
     const existingUser = existingAccount
-      ? await db.user.findUnique({ where: { id: existingAccount.userId }, select: { id: true } })
-      : await db.user.findUnique({ where: { email }, select: { id: true } });
+      ? await db.profile.findUnique({ where: { id: existingAccount.userId }, select: { id: true } })
+      : await db.profile.findUnique({ where: { email }, select: { id: true } });
     const isNewUser = !existingUser;
 
     if (isNewUser && process.env.NEXT_PUBLIC_ALLOW_REGISTRATION === "false") {
@@ -67,12 +68,12 @@ export async function GET(req: NextRequest) {
 
     const user = await db.$transaction(async (tx) => {
       const resolvedUser = existingUser
-        ? await tx.user.update({
+        ? await tx.profile.update({
             where: { id: existingUser.id },
             // Do not overwrite profile edits with Google values on later logins.
             data: { emailVerified: new Date() },
           })
-        : await tx.user.create({
+        : await tx.profile.create({
             data: {
               email,
               emailVerified: new Date(),
@@ -93,21 +94,8 @@ export async function GET(req: NextRequest) {
           type: "oauth",
           provider: "google",
           providerAccountId: profile.sub,
-          access_token: tokens.access_token,
-          refresh_token: tokens.refresh_token,
-          expires_at: tokens.expiry_date ? Math.floor(tokens.expiry_date / 1000) : null,
-          token_type: tokens.token_type,
-          scope: tokens.scope,
-          id_token: tokens.id_token,
         },
-        update: {
-          access_token: tokens.access_token,
-          refresh_token: tokens.refresh_token || undefined,
-          expires_at: tokens.expiry_date ? Math.floor(tokens.expiry_date / 1000) : null,
-          token_type: tokens.token_type,
-          scope: tokens.scope,
-          id_token: tokens.id_token,
-        },
+        update: {},
       });
 
       await tx.agreementAcceptance.upsert({
@@ -140,10 +128,20 @@ export async function GET(req: NextRequest) {
       verifiedState.challenge,
       isNewUser,
     );
+    if (tokens.access_token) {
+      await fetch("https://oauth2.googleapis.com/revoke", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ token: tokens.access_token }),
+        signal: AbortSignal.timeout(8_000),
+      }).catch(() => {});
+    }
     return NextResponse.redirect(googleAppRedirect({ code: handoffCode }));
   } catch {
     return redirectError("google_auth_failed");
   }
 }
+
+export const GET = withApiHandler(GETHandler);
 
 export const dynamic = "force-dynamic";

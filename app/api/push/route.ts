@@ -49,7 +49,7 @@ async function POSTHandler(req: NextRequest) {
       return NextResponse.json({ error: "Unauthorized. Please log in first." }, { status: 401 });
     }
 
-    const rl = rateLimit(`save_sub_${session.user.id}`, 15, 60000);
+    const rl = await rateLimit(`save_sub_${session.user.id}`, 15, 60000);
     if (!rl.success) {
       return NextResponse.json(
         { error: `Too many requests. Try again in ${rl.retryAfter}s.` },
@@ -66,7 +66,7 @@ async function POSTHandler(req: NextRequest) {
     const userId = session.user.id;
 
     if (body.locale === "en" || body.locale === "tr") {
-      await db.user.update({ where: { id: userId }, data: { locale: body.locale } });
+      await db.profile.update({ where: { id: userId }, data: { locale: body.locale } });
     }
 
     // Associate the new unique Firebase Cloud Messaging token with the user
@@ -94,7 +94,7 @@ async function DELETEHandler(req: NextRequest) {
     if (!session?.user?.id) {
       return NextResponse.json({ error: "Unauthorized. Please log in first." }, { status: 401 });
     }
-    const rl = rateLimit(`del_sub_${session.user.id}`, 20, 60000);
+    const rl = await rateLimit(`del_sub_${session.user.id}`, 20, 60000);
     if (!rl.success) {
       return NextResponse.json(
         { error: `Too many requests. Try again in ${rl.retryAfter}s.` },

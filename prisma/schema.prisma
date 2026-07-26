@@ -8,46 +8,25 @@ datasource db {
 }
 
 model Account {
-  id                String  @id @default(uuid())
+  id                String @id @default(uuid())
   userId            String
   type              String
   provider          String
   providerAccountId String
-  refresh_token     String? @db.Text
-  access_token      String? @db.Text
-  expires_at        Int?
-  token_type        String?
-  scope             String?
-  id_token          String? @db.Text
-  session_state     String?
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([provider, providerAccountId])
   @@index([userId])
   @@map("accounts")
 }
 
-model Session {
-  id           String   @id @default(uuid())
-  sessionToken String   @unique
-  userId       String
-  expires      DateTime
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-  @@map("sessions")
-}
-
-model User {
+model Profile {
   id            String    @id @default(uuid())
   name          String?
   email         String?   @unique
   emailVerified DateTime?
   image         String?
-  password      String?
-  sessionVersion Int      @default(0)
   boostCredits  Int       @default(0)
   locale        String    @default("en")
 
@@ -65,7 +44,6 @@ model User {
   createdAt DateTime @default(now())
 
   accounts Account[]
-  sessions Session[]
 
   groupMembers         GroupMember[]
   dailyAssignments     DailyAssignment[]
@@ -88,7 +66,7 @@ model User {
   friendRequestsSent     Friendship[] @relation("FriendRequestsSent")
   friendRequestsReceived Friendship[] @relation("FriendRequestsReceived")
 
-  @@map("users")
+  @@map("profiles")
 }
 
 model AgreementAcceptance {
@@ -104,7 +82,7 @@ model AgreementAcceptance {
   ipAddress            String?
   userAgent            String?  @db.Text
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, agreementSlug, agreementVersion])
   @@index([userId, acceptedAt])
@@ -128,7 +106,7 @@ model FeedbackReport {
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, createdAt])
   @@index([status, createdAt])
@@ -206,8 +184,8 @@ model GroupBoost {
   userId    String
   createdAt DateTime @default(now())
 
-  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  group Group   @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([groupId])
   @@index([userId])
@@ -226,7 +204,7 @@ model GroupMember {
   lastActiveAt DateTime @default(now())
 
   group    Group                @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  user     User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user     Profile              @relation(fields: [userId], references: [id], onDelete: Cascade)
   xpEvents GroupMemberXpEvent[]
 
   @@unique([groupId, userId])
@@ -279,8 +257,8 @@ model DailyAssignment {
   isClaimed      Boolean @default(false)
   isMandatory    Boolean @default(false)
 
-  group Group  @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  group Group   @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
   clips Clip[]
   pokes Poke[]
 
@@ -298,8 +276,8 @@ model Volunteer {
   targetDate DateTime @db.Date
   createdAt  DateTime @default(now())
 
-  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  group Group   @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([groupId, userId, targetDate])
   @@index([groupId])
@@ -315,7 +293,7 @@ model Poke {
   createdAt    DateTime @default(now())
 
   assignment DailyAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
-  poker      User            @relation(fields: [pokerId], references: [id], onDelete: Cascade)
+  poker      Profile         @relation(fields: [pokerId], references: [id], onDelete: Cascade)
 
   @@index([assignmentId])
   @@index([pokerId])
@@ -329,8 +307,8 @@ model Friendship {
   status      String   @default("pending")
   createdAt   DateTime @default(now())
 
-  requester User @relation("FriendRequestsSent", fields: [requesterId], references: [id], onDelete: Cascade)
-  addressee User @relation("FriendRequestsReceived", fields: [addresseeId], references: [id], onDelete: Cascade)
+  requester Profile @relation("FriendRequestsSent", fields: [requesterId], references: [id], onDelete: Cascade)
+  addressee Profile @relation("FriendRequestsReceived", fields: [addresseeId], references: [id], onDelete: Cascade)
 
   @@unique([requesterId, addresseeId])
   @@index([requesterId])
@@ -362,7 +340,7 @@ model Clip {
   finalizedAt DateTime?
 
   assignment        DailyAssignment    @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
-  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user              Profile            @relation(fields: [userId], references: [id], onDelete: Cascade)
   group             Group              @relation(fields: [groupId], references: [id], onDelete: Cascade)
   reactions         Reaction[]
   photoResponses    PhotoResponse[]
@@ -386,7 +364,7 @@ model BoostPurchase {
   purchasedAt   DateTime
   createdAt     DateTime @default(now())
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, purchasedAt])
   @@map("boost_purchases")
@@ -416,8 +394,8 @@ model MediaUploadGrant {
   consumedAt  DateTime?
   createdAt   DateTime  @default(now())
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-  clip Clip @relation(fields: [clipId], references: [id], onDelete: Cascade)
+  user Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clip Clip    @relation(fields: [clipId], references: [id], onDelete: Cascade)
 
   @@index([userId, clipId])
   @@map("media_upload_grants")
@@ -438,8 +416,8 @@ model PhotoResponse {
   mediaType           String    @default("photo") // Determines if it's a photo or a snippet video
   createdAt           DateTime  @default(now())
 
-  clip Clip @relation(fields: [clipId], references: [id], onDelete: Cascade)
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clip Clip    @relation(fields: [clipId], references: [id], onDelete: Cascade)
+  user Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([clipId, userId])
   @@index([clipId])
@@ -454,8 +432,8 @@ model Reaction {
   emoji     String
   createdAt DateTime @default(now())
 
-  clip Clip @relation(fields: [clipId], references: [id], onDelete: Cascade)
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clip Clip    @relation(fields: [clipId], references: [id], onDelete: Cascade)
+  user Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([clipId, userId, emoji])
   @@index([clipId])
@@ -472,7 +450,7 @@ model Comment {
   createdAt DateTime @default(now())
 
   clip    Clip      @relation(fields: [clipId], references: [id], onDelete: Cascade)
-  user    User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user    Profile   @relation(fields: [userId], references: [id], onDelete: Cascade)
   parent  Comment?  @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
   replies Comment[] @relation("CommentReplies")
 
@@ -488,8 +466,8 @@ model View {
   userId    String
   createdAt DateTime @default(now())
 
-  clip Clip @relation(fields: [clipId], references: [id], onDelete: Cascade)
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clip Clip    @relation(fields: [clipId], references: [id], onDelete: Cascade)
+  user Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([clipId, userId])
   @@index([clipId])
@@ -501,7 +479,7 @@ model PushSubscription {
   id        String   @id @default(uuid())
   token     String   @unique
   userId    String?
-  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      Profile? @relation(fields: [userId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -513,7 +491,7 @@ model UnlockedAchievement {
   groupId       String   @default("global")
   unlockedAt    DateTime @default(now())
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, achievementId, groupId])
   @@index([userId])
@@ -548,8 +526,18 @@ model ActiveUpload {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
+  group Group   @relation(fields: [groupId], references: [id], onDelete: Cascade)
 
   @@map("active_uploads")
+}
+
+model RateLimitBucket {
+  key       String   @id
+  count     Int
+  resetAt   DateTime
+  updatedAt DateTime @updatedAt
+
+  @@index([resetAt])
+  @@map("rate_limit_buckets")
 }

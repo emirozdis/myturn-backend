@@ -34,7 +34,7 @@ async function POSTHandler(request: NextRequest) {
   const providedApiKey = request.headers.get("x-api-key") ?? "";
   if (!providedApiKey || !apiKeysMatch(providedApiKey, expectedApiKey)) {
     return NextResponse.json(
-      { error: "Unauthorized", code: "UNAUTHORIZED" },
+      { error: "Unauthorized", code: "INVALID_SESSION" },
       { status: 401, headers: { "Cache-Control": "no-store" } },
     );
   }

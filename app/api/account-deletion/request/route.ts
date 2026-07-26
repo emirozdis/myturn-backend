@@ -9,7 +9,7 @@ import { rateLimit } from "@/lib/rate-limit";
 
 async function POSTHandler(req: NextRequest) {
   const ip = req.headers.get("cf-connecting-ip") || req.headers.get("x-forwarded-for") || "unknown_ip";
-  if (!rateLimit(`delete_request_ip_${ip}`, 5, 60 * 60 * 1000).success) {
+  if (!(await rateLimit(`delete_request_ip_${ip}`, 5, 60 * 60 * 1000)).success) {
     return NextResponse.json({ error: "Too many requests. Please try again later." }, { status: 429 });
   }
 
@@ -18,11 +18,11 @@ async function POSTHandler(req: NextRequest) {
   if (!email || email.length > 320 || !email.includes("@")) {
     return NextResponse.json({ error: "Enter a valid email address." }, { status: 400 });
   }
-  if (!rateLimit(`delete_request_email_${email}`, 3, 60 * 60 * 1000).success) {
+  if (!(await rateLimit(`delete_request_email_${email}`, 3, 60 * 60 * 1000)).success) {
     return NextResponse.json({ error: "Too many requests. Please try again later." }, { status: 429 });
   }
 
-  const user = await db.user.findUnique({
+  const user = await db.profile.findUnique({
     where: { email },
     select: { name: true },
   });

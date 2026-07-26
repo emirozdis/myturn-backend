@@ -9,7 +9,7 @@ import { logInfo, reportError, reportWarning } from "@/lib/observability/logger"
 import type { RecordingComposition } from "@/lib/recording-composition";
 
 const TRANSCODER_API_KEY = process.env.TRANSCODER_API_KEY || "";
-const NEXT_PUBLIC_APP_URL = process.env.NEXT_PUBLIC_APP_URL || process.env.NEXTAUTH_URL || "https://myturn.app";
+const NEXT_PUBLIC_APP_URL = process.env.NEXT_PUBLIC_APP_URL || process.env.APP_BASE_URL || "https://myturn.app";
 const R2_BUCKET_NAME = process.env.CLOUDFLARE_R2_BUCKET_NAME || "vlogs";
 const IS_SINGLE_BUCKET = !!process.env.CLOUDFLARE_R2_BUCKET_NAME;
 

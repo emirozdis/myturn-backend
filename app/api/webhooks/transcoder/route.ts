@@ -185,7 +185,7 @@ async function POSTHandler(req: NextRequest) {
 
   if (event === "Saved" && clip && clip.transcodeStatus !== "COMPLETED") {
     const [poster, group, members] = await Promise.all([
-      db.user.findUnique({ where: { id: clip.userId }, select: { name: true, handle: true } }),
+      db.profile.findUnique({ where: { id: clip.userId }, select: { name: true, handle: true } }),
       db.group.findUnique({ where: { id: clip.groupId }, select: { name: true } }),
       db.groupMember.findMany({ where: { groupId: clip.groupId }, select: { userId: true } }),
     ]);
@@ -201,7 +201,7 @@ async function POSTHandler(req: NextRequest) {
         where: { id: photoResponse.clipId },
         include: { group: { select: { name: true } }, user: { select: { id: true } } },
       }),
-      db.user.findUnique({ where: { id: photoResponse.userId }, select: { name: true } }),
+      db.profile.findUnique({ where: { id: photoResponse.userId }, select: { name: true } }),
     ]);
     if (targetClip && targetClip.userId !== photoResponse.userId) {
       await sendPushToUser(targetClip.userId, {

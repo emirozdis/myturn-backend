@@ -207,7 +207,7 @@ export async function finalizeUploadedClip(
 
     if (isPhoto && reward.claimed) {
       const [poster, members] = await Promise.all([
-        db.user.findUnique({ where: { id: clip.userId }, select: { name: true, handle: true } }),
+        db.profile.findUnique({ where: { id: clip.userId }, select: { name: true, handle: true } }),
         db.groupMember.findMany({ where: { groupId: clip.groupId }, select: { userId: true } }),
       ]);
       const posterName = poster?.name || (poster?.handle ? `@${poster.handle}` : undefined);

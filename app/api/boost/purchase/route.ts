@@ -27,7 +27,7 @@ async function POSTHandler(req: NextRequest) {
     const session = await getAuthSession();
     if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    const rl = rateLimit(`boost_purchase_${session.user.id}`, 10, 60_000);
+    const rl = await rateLimit(`boost_purchase_${session.user.id}`, 10, 60_000);
     if (!rl.success) return NextResponse.json({ error: "Too many purchase checks." }, { status: 429 });
 
     const rawBody = await req.json().catch(() => ({}));
@@ -77,7 +77,7 @@ async function POSTHandler(req: NextRequest) {
     const recordedIds = new Set(recorded.map((purchase) => purchase.transactionId));
     const purchase = validPurchases.find((candidate) => !recordedIds.has(candidate.id!));
     if (!purchase) {
-      const user = await db.user.findUnique({ where: { id: session.user.id }, select: { boostCredits: true } });
+      const user = await db.profile.findUnique({ where: { id: session.user.id }, select: { boostCredits: true } });
       return NextResponse.json({ success: true, alreadyProcessed: true, boostCredits: user?.boostCredits || 0 });
     }
 
@@ -102,7 +102,7 @@ async function POSTHandler(req: NextRequest) {
           purchasedAt,
         },
       });
-      return tx.user.update({
+      return tx.profile.update({
         where: { id: session.user.id },
         data: { boostCredits: { increment: 1 } },
         select: { boostCredits: true },

@@ -20,6 +20,93 @@ type ApiHandlerOptions = {
 
 const GENERIC_ERROR_MESSAGE = "Something went wrong. Please try again.";
 
+function codeForResponse(status: number, message?: string): string {
+  const normalizedMessage = message?.toLowerCase() ?? "";
+
+  if (normalizedMessage.includes("app check") || normalizedMessage.includes("appcheck")) {
+    return normalizedMessage.includes("required") || normalizedMessage.includes("missing")
+      ? "NO_APPCHECK_TOKEN"
+      : "INVALID_APPCHECK_TOKEN";
+  }
+  if (status === 401) {
+    return "INVALID_SESSION";
+  }
+  if (status === 403) return "FORBIDDEN";
+  if (status === 404) return "NOT_FOUND";
+  if (status === 409) return "CONFLICT";
+  if (status === 410) return "GONE";
+  if (status === 413) return "PAYLOAD_TOO_LARGE";
+  if (status === 415) return "UNSUPPORTED_MEDIA_TYPE";
+  if (status === 422) return "UNPROCESSABLE_REQUEST";
+  if (status === 429) return "RATE_LIMITED";
+  if (status === 207) return "PARTIAL_FAILURE";
+  if (status >= 500) return "INTERNAL_ERROR";
+  return "INVALID_REQUEST";
+}
+
+async function normalizeResponse(response: Response): Promise<Response> {
+  const isJson = response.headers.get("content-type")?.includes("application/json") ?? false;
+  if (!isJson) {
+    // A few legacy handlers still return plain-text 4xx responses. Bring those
+    // into the same machine-readable contract without touching binary media or
+    // OAuth redirects.
+    if (response.status < 400 || response.status >= 600) return response;
+    const error = (await response.clone().text()).trim();
+    if (!error) return response;
+    const headers = new Headers(response.headers);
+    headers.delete("content-length");
+    headers.set("content-type", "application/json");
+    return new Response(JSON.stringify({
+      success: false,
+      code: codeForResponse(response.status, error),
+      error,
+      ...(response.status === 400 ? { message: error } : {}),
+    }), {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
+  }
+
+  let body: unknown;
+  try {
+    body = await response.clone().json();
+  } catch {
+    return response;
+  }
+
+  if (!body || typeof body !== "object" || Array.isArray(body)) return response;
+
+  const current = body as Record<string, unknown>;
+  const successful = response.ok && current.success !== false;
+  const responseError = typeof current.error === "string"
+    ? current.error
+    : typeof current.message === "string"
+      ? current.message
+      : response.status === 400
+        ? "The request is invalid. Check the required fields and values."
+        : undefined;
+  const normalized = successful
+    ? { ...current, success: true, code: "SUCCESS" }
+    : {
+        ...current,
+        success: false,
+        code: typeof current.code === "string"
+          ? current.code
+          : codeForResponse(response.status, typeof current.error === "string" ? current.error : undefined),
+        ...(responseError ? { error: responseError } : {}),
+        ...(response.status === 400 && responseError ? { message: responseError } : {}),
+      };
+
+  const headers = new Headers(response.headers);
+  headers.delete("content-length");
+  return new Response(JSON.stringify(normalized), {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 function normalizedRoute(pathname: string): string {
   if (pathname.startsWith("/api/media/")) return "/api/media/[...path]";
 
@@ -166,6 +253,8 @@ export function withApiHandler<Context = unknown>(
             response = safeServerErrorResponse(status, logId);
           }
         }
+
+        response = await normalizeResponse(response);
 
         const durationMs = Math.round((performance.now() - startedAt) * 100) / 100;
         requestLogger.info(

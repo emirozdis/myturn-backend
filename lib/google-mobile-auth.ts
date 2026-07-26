@@ -12,8 +12,10 @@ type GoogleOAuthState = {
 };
 
 function authSecret() {
-  const secret = process.env.NEXTAUTH_SECRET;
-  if (!secret) throw new Error("NEXTAUTH_SECRET is required for Google sign-in.");
+  const secret = process.env.AUTH_STATE_SECRET;
+  if (!secret || secret.length < 32) {
+    throw new Error("AUTH_STATE_SECRET must contain at least 32 characters.");
+  }
   return secret;
 }
 
@@ -112,7 +114,7 @@ export async function consumeGoogleMobileHandoff(code: string, verifier: string)
 export function getGoogleOAuthConfig() {
   const clientId = process.env.GOOGLE_CLIENT_ID?.trim() || "";
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim() || "";
-  const baseUrl = process.env.NEXTAUTH_URL?.trim() || "http://localhost:3000";
+  const baseUrl = process.env.APP_BASE_URL?.trim() || "http://localhost:3000";
 
   return {
     clientId,

@@ -98,7 +98,7 @@ async function POSTHandler(req: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const rl = rateLimit(`upload_avatar_${session.user.id}`, 5, 60000);
+    const rl = await rateLimit(`upload_avatar_${session.user.id}`, 5, 60000);
     if (!rl.success) {
       return NextResponse.json(
         { error: `You are uploading avatars too fast. Try again in ${rl.retryAfter}s.` },
@@ -126,7 +126,7 @@ async function POSTHandler(req: NextRequest) {
 
     await r2.upload("avatars", path, image.buffer, image.contentType);
 
-    await db.user.update({
+    await db.profile.update({
       where: { id: userId },
       data: { image: path },
     });

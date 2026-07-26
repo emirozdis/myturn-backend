@@ -1,6 +1,8 @@
-import { headers, cookies } from "next/headers";
+import { headers } from "next/headers";
+import type { DecodedIdToken } from "firebase-admin/auth";
 import { getFirebaseAuth } from "@/lib/firebase-admin";
 import { prisma } from "@/lib/prisma";
+import { identityMatchesProfile } from "@/lib/auth-policy";
 
 export interface SessionUser {
   id: string;
@@ -11,13 +13,20 @@ export interface SessionUser {
 
 export interface Session {
   user: SessionUser;
+  firebase: {
+    uid: string;
+    authTime: number;
+    signInProvider: string | null;
+  };
 }
 
-export async function verifyFirebaseIdToken(token: string) {
+export async function verifyFirebaseIdToken(
+  token: string,
+  checkRevoked = true,
+): Promise<DecodedIdToken | null> {
   try {
-    const auth = getFirebaseAuth();
-    return await auth.verifyIdToken(token);
-  } catch (error) {
+    return await getFirebaseAuth().verifyIdToken(token, checkRevoked);
+  } catch {
     return null;
   }
 }
@@ -25,65 +34,42 @@ export async function verifyFirebaseIdToken(token: string) {
 export async function getAuthSession(): Promise<Session | null> {
   try {
     const reqHeaders = await headers();
-    const reqCookies = await cookies();
-
-    let token: string | null = null;
     const authHeader = reqHeaders.get("authorization");
-    if (authHeader && authHeader.startsWith("Bearer ")) {
-      token = authHeader.substring(7).trim();
-    }
+    if (!authHeader?.startsWith("Bearer ")) return null;
 
-    if (!token) {
-      token = reqCookies.get("firebase_session")?.value || null;
-    }
+    const token = authHeader.substring(7).trim();
+    if (!token) return null;
 
-    if (!token) {
-      return null;
-    }
+    const decodedToken = await verifyFirebaseIdToken(token, true);
+    if (!decodedToken?.uid) return null;
 
-    const decodedToken = await verifyFirebaseIdToken(token);
-    if (!decodedToken) {
-      return null;
-    }
-
-    const uid = decodedToken.uid;
-    const emailNormalized = decodedToken.email ? decodedToken.email.toLowerCase().trim() : null;
-
-    let user = await prisma.user.findFirst({
-      where: {
-        OR: [
-          { id: uid },
-          ...(emailNormalized ? [{ email: emailNormalized }] : []),
-        ],
-      },
+    const profile = await prisma.profile.findUnique({
+      where: { id: decodedToken.uid },
     });
-
-    if (!user && emailNormalized) {
-      user = await prisma.user.create({
-        data: {
-          id: uid,
-          email: emailNormalized,
-          name: decodedToken.name || emailNormalized.split("@")[0],
-          image: decodedToken.picture || null,
-          emailVerified: decodedToken.email_verified ? new Date() : null,
-        },
-      });
-    }
-
-    if (!user) {
-      return null;
-    }
+    if (!profile) return null;
+    if (!identityMatchesProfile(
+      {
+        uid: decodedToken.uid,
+        email: decodedToken.email,
+        emailVerified: decodedToken.email_verified === true,
+      },
+      profile,
+    )) return null;
 
     return {
       user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        image: user.image,
+        id: profile.id,
+        email: profile.email,
+        name: profile.name,
+        image: profile.image,
+      },
+      firebase: {
+        uid: decodedToken.uid,
+        authTime: decodedToken.auth_time,
+        signInProvider: decodedToken.firebase?.sign_in_provider || null,
       },
     };
-  } catch (err) {
-    console.error("[AUTH] Error inside getAuthSession:", err);
+  } catch {
     return null;
   }
 }

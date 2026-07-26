@@ -53,7 +53,7 @@ export async function checkUserProStatus(userId: string): Promise<boolean> {
 
 export async function getUserBoostLimit(userId: string): Promise<number> {
   const isPro = await checkUserProStatus(userId);
-  const user = await prisma.user.findUnique({ where: { id: userId }, select: { boostCredits: true } });
+  const user = await prisma.profile.findUnique({ where: { id: userId }, select: { boostCredits: true } });
   const limit = (isPro ? 1 : 0) + (user?.boostCredits || 0);
   logger.debug({ event: "boost.limit_calculated", userId, limit }, "Boost limit calculated");
   return limit;

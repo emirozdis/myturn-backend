@@ -13,6 +13,7 @@ import { checkUserProStatus, isArchiveLocked } from "../../../lib/pro-helper";
 import { r2 } from "@/lib/r2";
 import { b2 } from "@/lib/b2";
 import { consumeAuthCode } from "@/lib/auth-tokens";
+import { getFirebaseAuth } from "@/lib/firebase-admin";
 
 type StorageTier = "hot" | "cold";
 
@@ -38,6 +39,7 @@ function storageTiersForClip(storageTier: string): StorageTier[] {
 
 function expireSessionCookies(response: NextResponse) {
   for (const name of [
+    "firebase_session",
     "next-auth.session-token",
     "__Secure-next-auth.session-token",
     "authjs.session-token",
@@ -50,54 +52,6 @@ function expireSessionCookies(response: NextResponse) {
       sameSite: "lax",
       secure: name.startsWith("__Secure-"),
     });
-  }
-}
-
-type ProviderAuthorization = {
-  provider: string;
-  accessToken: string | null;
-  refreshToken: string | null;
-};
-
-async function revokeProviderAuthorization(account: ProviderAuthorization) {
-  const token = account.refreshToken || account.accessToken;
-  if (!token) return;
-
-  if (account.provider === "apple") {
-    const clientId = process.env.APPLE_ID;
-    const clientSecret = process.env.APPLE_SECRET;
-    if (!clientId || !clientSecret) {
-      throw new Error("Sign in with Apple revocation is not configured.");
-    }
-
-    const response = await fetch("https://appleid.apple.com/auth/revoke", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        client_id: clientId,
-        client_secret: clientSecret,
-        token,
-        token_type_hint: account.refreshToken ? "refresh_token" : "access_token",
-      }),
-      signal: AbortSignal.timeout(8_000),
-    });
-    if (!response.ok) {
-      throw new Error(`Sign in with Apple revocation failed with status ${response.status}.`);
-    }
-  }
-
-  if (account.provider === "google") {
-    const response = await fetch("https://oauth2.googleapis.com/revoke", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ token }),
-      signal: AbortSignal.timeout(8_000),
-    });
-    // An expired or previously revoked Google token no longer grants access and
-    // should not prevent deletion of the user's MyTurn account.
-    if (!response.ok && response.status !== 400) {
-      throw new Error(`Google authorization revocation failed with status ${response.status}.`);
-    }
   }
 }
 
@@ -121,6 +75,19 @@ async function deleteRevenueCatCustomer(userId: string) {
   }
 }
 
+async function deleteFirebaseIdentity(userId: string) {
+  const auth = getFirebaseAuth();
+  try {
+    await auth.revokeRefreshTokens(userId);
+    await auth.deleteUser(userId);
+  } catch (error: unknown) {
+    const code = typeof error === "object" && error && "code" in error
+      ? String(error.code)
+      : "";
+    if (code !== "auth/user-not-found") throw error;
+  }
+}
+
 async function GETHandler(req: NextRequest) {
   try {
     const session = await getAuthSession();
@@ -132,7 +99,7 @@ async function GETHandler(req: NextRequest) {
     const intent = searchParams.get("intent");
 
     if (intent === "usernameAvailability") {
-      const availabilityRateLimit = rateLimit(`username_availability_${session.user.id}`, 30, 60000);
+      const availabilityRateLimit = await rateLimit(`username_availability_${session.user.id}`, 30, 60000);
       if (!availabilityRateLimit.success) {
         return NextResponse.json(
           { error: `Too many username checks. Try again in ${availabilityRateLimit.retryAfter}s.` },
@@ -145,7 +112,7 @@ async function GETHandler(req: NextRequest) {
         return NextResponse.json({ success: true, available: false });
       }
 
-      const existing = await db.user.findFirst({
+      const existing = await db.profile.findFirst({
         where: {
           handle,
           id: { not: session.user.id },
@@ -180,7 +147,7 @@ async function GETHandler(req: NextRequest) {
         }
       }
 
-      const user = await db.user.findUnique({
+      const user = await db.profile.findUnique({
         where: { id: userId },
         select: {
           id: true,
@@ -274,7 +241,7 @@ async function GETHandler(req: NextRequest) {
       });
     }
 
-    const user = await db.user.findUnique({
+    const user = await db.profile.findUnique({
       where: { id: session.user.id },
       select: {
         id: true,
@@ -305,7 +272,7 @@ async function GETHandler(req: NextRequest) {
         ? user.name.toLowerCase().replace(/\s+/g, "") + Math.floor(100 + Math.random() * 900)
         : `user${Math.floor(1000 + Math.random() * 9000)}`;
       
-      await db.user.update({
+      await db.profile.update({
         where: { id: user.id },
         data: { handle: generatedHandle },
       });
@@ -527,7 +494,7 @@ async function POSTHandler(req: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const rl = rateLimit(`update_profile_${session.user.id}`, 10, 60000);
+    const rl = await rateLimit(`update_profile_${session.user.id}`, 10, 60000);
     if (!rl.success) {
       return NextResponse.json(
         { error: `You are updating your profile too fast. Try again in ${rl.retryAfter}s.` },
@@ -544,7 +511,7 @@ async function POSTHandler(req: NextRequest) {
 
     const formattedHandle = handle.toLowerCase().trim().replace(/\s+/g, "");
 
-    const existing = await db.user.findFirst({
+    const existing = await db.profile.findFirst({
       where: {
         handle: formattedHandle,
         id: { not: session.user.id },
@@ -555,7 +522,7 @@ async function POSTHandler(req: NextRequest) {
       return NextResponse.json({ error: "Username/handle is already taken by another user." }, { status: 409 });
     }
 
-    const updated = await db.user.update({
+    const updated = await db.profile.update({
       where: { id: session.user.id },
       data: {
         name,
@@ -604,8 +571,8 @@ async function DELETEHandler(req: NextRequest) {
         return NextResponse.json({ error: "A valid email and 6-digit verification code are required." }, { status: 400 });
       }
 
-      if (!rateLimit(`delete_account_web_ip_${ip}`, 10, 60 * 60 * 1000).success ||
-          !rateLimit(`delete_account_web_email_${email}`, 5, 60 * 60 * 1000).success) {
+      if (!(await rateLimit(`delete_account_web_ip_${ip}`, 10, 60 * 60 * 1000)).success ||
+          !(await rateLimit(`delete_account_web_email_${email}`, 5, 60 * 60 * 1000)).success) {
         return NextResponse.json({ error: "Too many deletion attempts. Please try again later." }, { status: 429 });
       }
 
@@ -614,7 +581,7 @@ async function DELETEHandler(req: NextRequest) {
         return NextResponse.json({ error: "This deletion code is invalid or expired." }, { status: 401 });
       }
 
-      const verifiedUser = await db.user.findUnique({ where: { email }, select: { id: true } });
+      const verifiedUser = await db.profile.findUnique({ where: { email }, select: { id: true } });
       if (!verifiedUser) {
         const response = NextResponse.json({ success: true });
         expireSessionCookies(response);
@@ -623,7 +590,7 @@ async function DELETEHandler(req: NextRequest) {
       userId = verifiedUser.id;
     }
 
-    const rl = rateLimit(`delete_account_${userId}`, 3, 60 * 60 * 1000);
+    const rl = await rateLimit(`delete_account_${userId}`, 3, 60 * 60 * 1000);
     if (!rl.success) {
       return NextResponse.json(
         { error: `Too many account deletion attempts. Try again in ${rl.retryAfter}s.` },
@@ -631,7 +598,7 @@ async function DELETEHandler(req: NextRequest) {
       );
     }
 
-    const user = await db.user.findUnique({
+    const user = await db.profile.findUnique({
       where: { id: userId },
       select: {
         email: true,
@@ -660,13 +627,6 @@ async function DELETEHandler(req: NextRequest) {
         feedbackReports: {
           where: { screenshotPath: { not: null } },
           select: { screenshotPath: true },
-        },
-        accounts: {
-          select: {
-            provider: true,
-            access_token: true,
-            refresh_token: true,
-          },
         },
       },
     });
@@ -803,14 +763,8 @@ async function DELETEHandler(req: NextRequest) {
       feedbackScreenshots.length ? r2.deleteObjects("feedback", feedbackScreenshots) : Promise.resolve(),
     ]);
 
-    for (const account of user.accounts) {
-      await revokeProviderAuthorization({
-        provider: account.provider,
-        accessToken: account.access_token,
-        refreshToken: account.refresh_token,
-      });
-    }
     await deleteRevenueCatCustomer(userId);
+    await deleteFirebaseIdentity(userId);
 
     const affectedGroupIds = Array.from(new Set([
       ...user.groupMembers.map((membership) => membership.groupId),
@@ -844,7 +798,7 @@ async function DELETEHandler(req: NextRequest) {
       // as part of the same account-deletion transaction.
       await tx.backendIncident.deleteMany({ where: { userId } });
 
-      await tx.user.delete({ where: { id: userId } });
+      await tx.profile.delete({ where: { id: userId } });
 
       for (const groupId of affectedGroupIds) {
         const group = await tx.group.findUnique({

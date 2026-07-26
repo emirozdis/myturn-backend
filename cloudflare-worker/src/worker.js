@@ -74,7 +74,7 @@ function isPathAuthorized(path, payload) {
   return payload.s === "prefix" && payload.p.endsWith("/") && path.startsWith(payload.p);
 }
 
-export default {
+const worker = {
   async fetch(request, env) {
     const url = new URL(request.url);
     const path = url.pathname;
@@ -228,7 +228,7 @@ export default {
       let object;
       try {
         object = await bucket.get(cleanPath, getOptions);
-      } catch (e) {
+      } catch {
         return new Response("Internal Server Error", { status: 500 });
       }
 
@@ -288,3 +288,5 @@ export default {
     return new Response(body, { status, headers });
   },
 };
+
+export default worker;

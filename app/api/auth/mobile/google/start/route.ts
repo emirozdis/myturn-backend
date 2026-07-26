@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withApiHandler } from "@/lib/observability/api-handler";
 import { getCurrentAgreement } from "@/lib/legal-agreements";
 import { rateLimit } from "@/lib/rate-limit";
 import {
@@ -15,12 +16,12 @@ function clientIp(req: NextRequest) {
     .trim();
 }
 
-export async function GET(req: NextRequest) {
+async function GETHandler(req: NextRequest) {
   if (!googleLoginEnabled()) {
     return NextResponse.redirect(googleAppRedirect({ error: "google_disabled" }));
   }
 
-  const limited = rateLimit(`google_oauth_start_${clientIp(req)}`, 20, 10 * 60 * 1000);
+  const limited = await rateLimit(`google_oauth_start_${clientIp(req)}`, 20, 10 * 60 * 1000);
   if (!limited.success) {
     return NextResponse.redirect(googleAppRedirect({ error: "too_many_attempts" }));
   }
@@ -50,5 +51,7 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.redirect(authorizationUrl);
 }
+
+export const GET = withApiHandler(GETHandler);
 
 export const dynamic = "force-dynamic";

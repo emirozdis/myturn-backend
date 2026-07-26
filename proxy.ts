@@ -3,10 +3,28 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { verifyAppCheckToken } from "@/lib/app-check";
 import { rateLimit } from "@/lib/rate-limit";
+import {
+  isAppCheckExempt,
+  requiresLimitedUseAppCheck,
+} from "@/lib/api-security-policy";
 
 const APP_CHECK_HEADER = "x-firebase-appcheck";
 const API_RATE_LIMIT = 120;
 const API_RATE_LIMIT_WINDOW_MS = 60_000;
+
+function proxyResponse(status: number, code: string, error: string, headers?: HeadersInit) {
+  console.warn(JSON.stringify({
+    event: "api.proxy_rejected",
+    code,
+    status,
+    error,
+  }));
+
+  return NextResponse.json(
+    { success: false, code, error },
+    { status, headers },
+  );
+}
 
 function getClientIp(req: NextRequest) {
   return (
@@ -18,67 +36,42 @@ function getClientIp(req: NextRequest) {
 }
 
 async function protectUserApi(req: NextRequest) {
-  const result = rateLimit(
+  const result = await rateLimit(
     `api:${getClientIp(req)}`,
     API_RATE_LIMIT,
     API_RATE_LIMIT_WINDOW_MS,
   );
 
   if (!result.success) {
-    return NextResponse.json(
-      { error: "Too many requests." },
-      {
-        status: 429,
-        headers: { "Retry-After": String(result.retryAfter) },
-      },
-    );
+    return proxyResponse(429, "RATE_LIMITED", "Too many requests.", {
+      "Retry-After": String(result.retryAfter),
+    });
   }
 
   const appCheckToken = req.headers.get(APP_CHECK_HEADER);
   if (!appCheckToken) {
-    return NextResponse.json(
-      { error: "A Firebase App Check token is required." },
-      { status: 401 },
-    );
+    return proxyResponse(401, "NO_APPCHECK_TOKEN", "A Firebase App Check token is required.");
   }
 
   try {
-    await verifyAppCheckToken(appCheckToken);
+    await verifyAppCheckToken(
+      appCheckToken,
+      requiresLimitedUseAppCheck(req.method, req.nextUrl.pathname),
+    );
     return NextResponse.next();
   } catch {
-    return NextResponse.json(
-      { error: "Invalid Firebase App Check token." },
-      { status: 401 },
-    );
+    console.warn(JSON.stringify({
+      event: "api.proxy_appcheck_verification_failed",
+      code: "INVALID_APPCHECK_TOKEN",
+    }));
+    return proxyResponse(401, "INVALID_APPCHECK_TOKEN", "Invalid Firebase App Check token.");
   }
 }
 
 export async function proxy(req: NextRequest) {
-  // Scheduled invocations cannot carry a Firebase App Check token. This route
-  // authenticates independently with CRON_API_KEY via the x-api-key header.
-  if (req.nextUrl.pathname === "/api/cron") {
-    return NextResponse.next();
-  }
-
-  // The current privacy notice must remain readable before sign-in and when a
-  // user cannot obtain an App Check token. It contains no user-specific data.
-  if (req.nextUrl.pathname === "/api/legal/privacy") {
-    return NextResponse.next();
-  }
-
-  if (req.nextUrl.pathname === "/api/account-deletion/request" ||
-      (req.nextUrl.pathname === "/api/profile" && req.method === "DELETE")) {
-    return NextResponse.next();
-  }
-
-  // These two endpoints run in the system browser and receive Google's OAuth
-  // redirect, so they cannot carry the native app's App Check header. The
-  // session exchange remains App Check protected and is bound to the app with
-  // a one-time PKCE challenge.
-  if (
-    req.nextUrl.pathname === "/api/auth/mobile/google/start" ||
-    req.nextUrl.pathname === "/api/auth/mobile/google/callback"
-  ) {
+  // Machine routes authenticate independently, public legal/deletion routes
+  // must work outside the app, and browser OAuth cannot carry a native token.
+  if (isAppCheckExempt(req.method, req.nextUrl.pathname)) {
     return NextResponse.next();
   }
 

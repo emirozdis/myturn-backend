@@ -36,7 +36,7 @@ export async function authorizeMediaRead(userId: string, bucket: string, rawPath
 
   if (bucket === "avatars") {
     const avatarPath = canonicalAvatarPath(path);
-    const userAvatar = await db.user.findFirst({ where: { image: avatarPath }, select: { id: true } });
+    const userAvatar = await db.profile.findFirst({ where: { image: avatarPath }, select: { id: true } });
     if (userAvatar) return { path: avatarPath, storageTier: "HOT" };
 
     const groupAvatar = await db.group.findFirst({

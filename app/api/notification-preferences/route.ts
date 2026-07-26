@@ -18,7 +18,7 @@ async function GETHandler() {
   const session = await getAuthSession();
   if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const preferences = await db.user.findUnique({ where: { id: session.user.id }, select: preferenceSelect });
+  const preferences = await db.profile.findUnique({ where: { id: session.user.id }, select: preferenceSelect });
   if (!preferences) return NextResponse.json({ error: "User not found" }, { status: 404 });
   return NextResponse.json({ success: true, preferences });
 }
@@ -27,7 +27,7 @@ async function POSTHandler(req: NextRequest) {
   const session = await getAuthSession();
   if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const rl = rateLimit(`notification_preferences_${session.user.id}`, 30, 60_000);
+  const rl = await rateLimit(`notification_preferences_${session.user.id}`, 30, 60_000);
   if (!rl.success) return NextResponse.json({ error: "Too many requests" }, { status: 429 });
 
   const body = await req.json().catch(() => ({}));
@@ -37,7 +37,7 @@ async function POSTHandler(req: NextRequest) {
   }
   if (body.locale === "en" || body.locale === "tr") data.locale = body.locale;
 
-  const preferences = await db.user.update({
+  const preferences = await db.profile.update({
     where: { id: session.user.id },
     data,
     select: preferenceSelect,

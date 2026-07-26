@@ -194,7 +194,7 @@ async function GETHandler() {
       ...sentRequestsForExclude.map((s) => s.addresseeId),
     ];
 
-    const suggestionsRaw = await db.user.findMany({
+    const suggestionsRaw = await db.profile.findMany({
       where: {
         id: { notIn: excludeIds },
         groupMembers: {
@@ -257,7 +257,7 @@ async function POSTHandler(req: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const rl = rateLimit(`respond_friend_${session.user.id}`, 20, 60000);
+    const rl = await rateLimit(`respond_friend_${session.user.id}`, 20, 60000);
     if (!rl.success) {
       return NextResponse.json(
         { error: `Too many requests. Try again in ${rl.retryAfter}s.` },
@@ -276,14 +276,14 @@ async function POSTHandler(req: NextRequest) {
       // Defensive ID-vs-Handle resolution block to prevent foreign key errors
       let targetUser = null;
       if (targetUserId.length >= 20) {
-        targetUser = await db.user.findUnique({
+        targetUser = await db.profile.findUnique({
           where: { id: targetUserId }
         }).catch(() => null);
       }
 
       // Fallback: Query by user handle if no direct ID is matched
       if (!targetUser) {
-        targetUser = await db.user.findFirst({
+        targetUser = await db.profile.findFirst({
           where: { handle: targetUserId.toLowerCase().trim() }
         });
       }
@@ -319,7 +319,7 @@ async function POSTHandler(req: NextRequest) {
         }
       });
 
-      const requester = await db.user.findUnique({ where: { id: session.user.id }});
+      const requester = await db.profile.findUnique({ where: { id: session.user.id }});
       await sendPushToUser(resolvedTargetUserId, {
         category: "social",
         key: "friendRequest",
@@ -348,7 +348,7 @@ async function POSTHandler(req: NextRequest) {
           where: { id: requestId },
           data: { status: "accepted" }
         });
-        const addressee = await db.user.findUnique({ where: { id: session.user.id }});
+        const addressee = await db.profile.findUnique({ where: { id: session.user.id }});
         await sendPushToUser(request.requesterId, {
           category: "social",
           key: "friendAccepted",

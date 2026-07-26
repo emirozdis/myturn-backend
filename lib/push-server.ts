@@ -116,7 +116,7 @@ export async function sendPushToUser(
       social: "notifySocial",
       recaps: "notifyRecaps",
     };
-    const user = await db.user.findUnique({
+    const user = await db.profile.findUnique({
       where: { id: userId },
       select: {
         locale: true,

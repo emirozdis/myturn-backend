@@ -10,7 +10,7 @@ async function POSTHandler(req: NextRequest) {
     const session = await getAuthSession();
     if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    const rl = rateLimit(`boost_${session.user.id}`, 10, 60000);
+    const rl = await rateLimit(`boost_${session.user.id}`, 10, 60000);
     if (!rl.success) return NextResponse.json({ error: "Too many requests." }, { status: 429 });
 
     const rawBody = await req.json();
@@ -63,7 +63,7 @@ async function POSTHandler(req: NextRequest) {
       // adds another allocation, regardless of whether the account is Pro.
       const [isPro, user] = await Promise.all([
         checkUserProStatus(session.user.id),
-        db.user.findUnique({ where: { id: session.user.id }, select: { boostCredits: true } }),
+        db.profile.findUnique({ where: { id: session.user.id }, select: { boostCredits: true } }),
       ]);
       const boostLimit = (isPro ? 1 : 0) + (user?.boostCredits || 0);
       const usedBoosts = await db.groupBoost.count({ where: { userId: session.user.id } });
