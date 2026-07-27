@@ -19,6 +19,7 @@ export type RecordingComposition = {
 export type ValidatedRecordingMetadata = Record<string, unknown> & {
   composition?: RecordingComposition;
   speedBaked?: boolean;
+  prompt?: string;
 };
 
 const MAX_SEGMENTS = 64;
@@ -54,6 +55,13 @@ export function validateRecordingMetadata(
   }
 
   const metadata = parsed as ValidatedRecordingMetadata;
+  if (metadata.prompt !== undefined) {
+    if (typeof metadata.prompt !== "string" || metadata.prompt.trim().length > 500) {
+      throw new Error("Clip prompt is invalid or too large.");
+    }
+    metadata.prompt = metadata.prompt.trim();
+    if (!metadata.prompt) delete metadata.prompt;
+  }
   if (metadata.composition === undefined) {
     return { metadata, serialized: JSON.stringify(metadata), segmented: false };
   }

@@ -59,3 +59,20 @@ test("keeps legacy non-composition metadata backward compatible", () => {
   assert.equal(result.segmented, false);
   assert.deepEqual(result.metadata, { facingMode: "user" });
 });
+
+test("normalizes an optional clip-specific prompt", () => {
+  const result = validateRecordingMetadata(JSON.stringify({ prompt: "  What made you smile?  " }), 300, "vlog");
+  assert.equal(result.metadata?.prompt, "What made you smile?");
+});
+
+test("treats an empty clip prompt as no prompt", () => {
+  const result = validateRecordingMetadata(JSON.stringify({ prompt: "   " }), 300, "vlog");
+  assert.equal(result.metadata?.prompt, undefined);
+});
+
+test("rejects an oversized clip prompt", () => {
+  assert.throws(
+    () => validateRecordingMetadata(JSON.stringify({ prompt: "x".repeat(501) }), 300, "vlog"),
+    /prompt is invalid or too large/i,
+  );
+});

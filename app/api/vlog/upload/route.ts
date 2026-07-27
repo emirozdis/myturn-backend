@@ -340,6 +340,15 @@ async function POSTHandler(req: NextRequest) {
             location: upload.location,
             transcodeStatus: "UPLOADING",
             mediaType: upload.mediaType,
+            prompt: (() => {
+              if (!upload.metadata) return null;
+              try {
+                const value = JSON.parse(upload.metadata)?.prompt;
+                return typeof value === "string" && value.trim() ? value.trim() : null;
+              } catch {
+                return null;
+              }
+            })(),
             metadata: upload.metadata,
           },
         });
