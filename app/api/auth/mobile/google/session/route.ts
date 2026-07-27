@@ -56,8 +56,12 @@ async function POSTHandler(req: NextRequest) {
   }
 
   const body = await req.json().catch(() => null);
-  const code = typeof body?.code === "string" ? body.code : "";
-  const verifier = typeof body?.verifier === "string" ? body.verifier : "";
+  // The mobile API client sends positional arguments as a one-item array.
+  // Accept an object as well so this endpoint remains compatible with direct
+  // callers and future clients.
+  const payload = Array.isArray(body) ? body[0] : body;
+  const code = typeof payload?.code === "string" ? payload.code : "";
+  const verifier = typeof payload?.verifier === "string" ? payload.verifier : "";
   if (!code || !verifier) {
     return NextResponse.json({ error: "A Google handoff and verifier are required." }, { status: 400 });
   }
