@@ -218,6 +218,7 @@ model Prompt {
   text         String   @unique
   translations Json     @default("{}")
   createdAt    DateTime @default(now())
+  clips        Clip[]
 
   @@map("prompts")
 }
@@ -335,7 +336,7 @@ model Clip {
   archivedAt  DateTime?
 
   location    String?
-  prompt      String?
+  promptId    String?
   metadata    String?   @db.Text
   recordedAt  DateTime  @default(now())
   finalizedAt DateTime?
@@ -343,6 +344,7 @@ model Clip {
   assignment        DailyAssignment    @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
   user              Profile            @relation(fields: [userId], references: [id], onDelete: Cascade)
   group             Group              @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  prompt            Prompt?            @relation(fields: [promptId], references: [id], onDelete: SetNull)
   reactions         Reaction[]
   photoResponses    PhotoResponse[]
   comments          Comment[]
@@ -352,6 +354,7 @@ model Clip {
   @@index([assignmentId])
   @@index([userId])
   @@index([groupId])
+  @@index([promptId])
   @@map("clips")
 }
 

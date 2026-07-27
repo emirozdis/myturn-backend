@@ -55,6 +55,9 @@ export function validateRecordingMetadata(
   }
 
   const metadata = parsed as ValidatedRecordingMetadata;
+  // Prompt IDs are assigned from the server-owned catalog during upload
+  // initiation. Never accept a client-supplied foreign key.
+  delete metadata.promptId;
   if (metadata.prompt !== undefined) {
     if (typeof metadata.prompt !== "string" || metadata.prompt.trim().length > 500) {
       throw new Error("Clip prompt is invalid or too large.");

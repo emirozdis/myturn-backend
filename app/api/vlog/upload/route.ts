@@ -185,6 +185,16 @@ async function POSTHandler(req: NextRequest) {
       if (!assignment || memberCount < MIN_MEMBERS_FOR_DAILY_ASSIGNMENT || assignment.group.isFrozen || assignment.isPassed || !["active", "completed"].includes(assignment.status)) {
         return NextResponse.json({ error: "This assignment is not uploadable." }, { status: 403 });
       }
+      if (validatedMetadata.metadata?.prompt && assignment.activePrompt) {
+        const catalogPrompt = await db.prompt.findUnique({
+          where: { text: assignment.activePrompt },
+          select: { id: true },
+        });
+        if (catalogPrompt) {
+          validatedMetadata.metadata.promptId = catalogPrompt.id;
+          validatedMetadata.serialized = JSON.stringify(validatedMetadata.metadata);
+        }
+      }
       const localDate = (await getLocalDateInTimezone(assignment.group.timezone)).toISOString().slice(0, 10);
       if (assignment.date.toISOString().slice(0, 10) !== localDate) {
         return NextResponse.json({ error: "This assignment is no longer current." }, { status: 403 });
@@ -326,6 +336,21 @@ async function POSTHandler(req: NextRequest) {
 
         const dbVideoUrl = upload.key.startsWith("vlogs/") ? upload.key.slice(6) : upload.key;
         const isPhoto = upload.mediaType === "photo";
+        const requestedPromptId = (() => {
+          if (!upload.metadata) return null;
+          try {
+            const value = JSON.parse(upload.metadata)?.promptId;
+            return typeof value === "string" && value ? value : null;
+          } catch {
+            return null;
+          }
+        })();
+        const clipPromptId = requestedPromptId
+          ? (await db.prompt.findUnique({
+              where: { id: requestedPromptId },
+              select: { id: true },
+            }))?.id || null
+          : null;
         clip = await db.clip.upsert({
           where: { id: upload.clipId },
           update: {},
@@ -340,15 +365,7 @@ async function POSTHandler(req: NextRequest) {
             location: upload.location,
             transcodeStatus: "UPLOADING",
             mediaType: upload.mediaType,
-            prompt: (() => {
-              if (!upload.metadata) return null;
-              try {
-                const value = JSON.parse(upload.metadata)?.prompt;
-                return typeof value === "string" && value.trim() ? value.trim() : null;
-              } catch {
-                return null;
-              }
-            })(),
+            promptId: clipPromptId,
             metadata: upload.metadata,
           },
         });

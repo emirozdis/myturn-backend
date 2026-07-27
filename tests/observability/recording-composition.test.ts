@@ -76,3 +76,13 @@ test("rejects an oversized clip prompt", () => {
     /prompt is invalid or too large/i,
   );
 });
+
+test("removes a client-supplied prompt foreign key", () => {
+  const result = validateRecordingMetadata(
+    JSON.stringify({ prompt: "What made you smile?", promptId: "untrusted-id" }),
+    300,
+    "vlog",
+  );
+  assert.equal(result.metadata?.prompt, "What made you smile?");
+  assert.equal(result.metadata?.promptId, undefined);
+});
