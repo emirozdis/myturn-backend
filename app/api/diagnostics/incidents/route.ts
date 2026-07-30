@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import { rateLimit } from "@/lib/rate-limit";
 import { withApiHandler } from "@/lib/observability/api-handler";
 import { scrubLogText } from "@/lib/observability/logger";
+import { parseDiagnosticStatus } from "@/lib/observability/diagnostic-status";
 
 const MAX_BODY_BYTES = 160_000;
 const MAX_BREADCRUMBS = 120;
@@ -94,11 +95,12 @@ async function POSTHandler(req: NextRequest) {
   }
 
   const clientIncidentId = text(body.clientIncidentId, 200);
-  const status = integer(body.status, 0, 599);
+  const diagnosticStatus = parseDiagnosticStatus(body.status);
   const route = text(body.route, 500);
-  if (!clientIncidentId || status === undefined || !route) {
+  if (!clientIncidentId || !diagnosticStatus || !route) {
     return NextResponse.json({ error: "Missing required diagnostic fields." }, { status: 400 });
   }
+  const { clientStatus, persistedStatus } = diagnosticStatus;
 
   const session = await getAuthSession();
   const breadcrumbs = Array.isArray(body.breadcrumbs)
@@ -107,9 +109,9 @@ async function POSTHandler(req: NextRequest) {
   const occurredAt = date(body.occurredAt) || new Date();
   const code = text(body.code, 100);
   const fingerprint = createHash("sha256")
-    .update(`${text(body.method, 20) || "UNKNOWN"}|${route}|${status}|${code || ""}`)
+    .update(`${text(body.method, 20) || "UNKNOWN"}|${route}|${clientStatus}|${code || ""}`)
     .digest("hex");
-  const expiresAt = new Date(Date.now() + (status >= 500 ? 90 : 30) * 24 * 60 * 60_000);
+  const expiresAt = new Date(Date.now() + (clientStatus >= 500 ? 90 : 30) * 24 * 60 * 60_000);
 
   try {
     const incident = await db.backendIncident.create({
@@ -129,12 +131,12 @@ async function POSTHandler(req: NextRequest) {
         retryNumber: integer(body.retryNumber, 0, 100),
         recovered: typeof body.recovered === "boolean" ? body.recovered : false,
         finalizedAt: date(body.finalizedAt) || new Date(),
-        level: status >= 500 ? "error" : "warn",
-        event: "client.http_non_2xx",
+        level: clientStatus >= 500 ? "error" : "warn",
+        event: clientStatus === 0 ? "client.transport_failure" : "client.http_non_2xx",
         code,
         route,
         method: text(body.method, 20),
-        status,
+        status: persistedStatus,
         userId: session?.user.id,
         errorType: text(body.errorType, 200),
         errorMessage: text(body.errorMessage, 2_000),

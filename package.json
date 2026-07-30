@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "tsx --test tests/observability/*.test.ts",
+    "test": "tsx --test tests/observability/*.test.ts tests/surveys/*.test.ts",
     "check:observability": "node scripts/check-observability.mjs",
     "restore:email-user": "node scripts/restore-email-user.js",
     "db:migrate:deploy": "prisma migrate deploy",

@@ -67,6 +67,19 @@ enum FeedbackCategory {
   other
 }
 
+enum SurveyStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  ARCHIVED
+}
+
+enum SurveyQuestionType {
+  FREE_TEXT
+  SINGLE_SELECT
+  MULTI_SELECT
+}
+
 enum IncidentSource {
   server
   client
@@ -107,12 +120,13 @@ model Profile {
   boostCredits  Int       @default(0)
   locale        Locale    @default(en)
 
-  notifyTurns        Boolean @default(true)
-  notifyReminders    Boolean @default(true)
-  notifyPosts        Boolean @default(true)
-  notifyInteractions Boolean @default(true)
-  notifySocial       Boolean @default(true)
-  notifyRecaps       Boolean @default(true)
+  notifyTurns          Boolean @default(true)
+  notifyReminders      Boolean @default(true)
+  notifyPosts          Boolean @default(true)
+  notifyInteractions   Boolean @default(true)
+  notifySocial         Boolean @default(true)
+  notifyRecaps         Boolean @default(true)
+  allowOptionalSurveys Boolean @default(true)
 
   bio      String? @default("Vlogging our days, making our memories ✨")
   handle   String? @unique
@@ -140,6 +154,7 @@ model Profile {
   mediaUploadGrants    MediaUploadGrant[]
   agreementAcceptances AgreementAcceptance[]
   feedbackReports      FeedbackReport[]
+  surveyResponses      SurveyResponse[]
 
   friendRequestsSent     Friendship[] @relation("FriendRequestsSent")
   friendRequestsReceived Friendship[] @relation("FriendRequestsReceived")
@@ -189,6 +204,117 @@ model FeedbackReport {
   @@index([userId, createdAt])
   @@index([status, createdAt])
   @@map("feedback_reports")
+}
+
+model Survey {
+  id              String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  key             String       @unique
+  revision        Int          @default(1)
+  status          SurveyStatus @default(DRAFT)
+  title           Json
+  description     Json?
+  isMandatory     Boolean      @default(false)
+  priority        Int          @default(0)
+  platforms       String[]     @default([])
+  releaseChannels String[]     @default([])
+  appVersions     String[]     @default([])
+  minAppVersion   String?
+  maxAppVersion   String?
+  buildNumbers    Int[]        @default([])
+  minBuildNumber  Int?
+  maxBuildNumber  Int?
+  startsAt        DateTime?    @db.Timestamptz(3)
+  endsAt          DateTime?    @db.Timestamptz(3)
+  audience        Json?
+  presentation    Json?
+  metadata        Json?
+  createdAt       DateTime     @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime     @default(now()) @updatedAt @db.Timestamptz(3)
+
+  questions SurveyQuestion[]
+  responses SurveyResponse[]
+
+  @@index([status, startsAt, endsAt, priority])
+  @@map("surveys")
+}
+
+model SurveyQuestion {
+  id             String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  surveyId       String             @db.Uuid
+  surveyRevision Int                @default(1)
+  key            String
+  type           SurveyQuestionType
+  prompt         Json
+  description    Json?
+  options        Json?
+  isRequired     Boolean            @default(true)
+  sortOrder      Int
+  minLength      Int?
+  maxLength      Int?
+  minSelected    Int?
+  maxSelected    Int?
+  metadata       Json?
+  createdAt      DateTime           @default(now()) @db.Timestamptz(3)
+
+  survey  Survey         @relation(fields: [surveyId], references: [id], onDelete: Cascade)
+  answers SurveyAnswer[]
+
+  @@unique([surveyId, surveyRevision, key])
+  @@unique([surveyId, surveyRevision, sortOrder])
+  @@map("survey_questions")
+}
+
+model SurveyResponse {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  surveyId       String   @db.Uuid
+  userId         String   @db.Uuid
+  surveyRevision Int
+  platform       String
+  appVersion     String
+  buildNumber    Int?
+  releaseChannel String?
+  submittedAt    DateTime @default(now()) @db.Timestamptz(3)
+  clientContext  Json?
+
+  survey  Survey         @relation(fields: [surveyId], references: [id], onDelete: Restrict)
+  user    Profile        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  answers SurveyAnswer[]
+
+  @@unique([surveyId, userId, surveyRevision])
+  @@index([surveyId, submittedAt])
+  @@index([userId, submittedAt])
+  @@map("survey_responses")
+}
+
+model SurveyAnswer {
+  id              String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  responseId      String @db.Uuid
+  questionId      String @db.Uuid
+  questionKey     String
+  promptSnapshot  Json
+  optionsSnapshot Json?
+  value           Json
+
+  response SurveyResponse @relation(fields: [responseId], references: [id], onDelete: Cascade)
+  question SurveyQuestion @relation(fields: [questionId], references: [id], onDelete: Restrict)
+
+  @@unique([responseId, questionId])
+  @@index([questionId])
+  @@map("survey_answers")
+}
+
+model AppVersionRequirement {
+  id                 String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  platform           String
+  releaseChannel     String
+  minimumVersion     String
+  minimumBuildNumber Int
+  updateUrl          String
+  createdAt          DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime @default(now()) @updatedAt @db.Timestamptz(3)
+
+  @@unique([platform, releaseChannel])
+  @@map("app_version_requirements")
 }
 
 model BackendIncident {
