@@ -41,19 +41,19 @@ test("Firebase authorization requires a verified exact-UID profile mapping", () 
   assert.equal(identityMatchesProfile(identity, null), false);
   assert.equal(identityMatchesProfile(
     { ...identity, emailVerified: false },
-    { id: "firebase-uid", email: "person@example.com" },
+    { firebaseUid: "firebase-uid", email: "person@example.com" },
   ), false);
   assert.equal(identityMatchesProfile(
     identity,
-    { id: "different-uid", email: "person@example.com" },
+    { firebaseUid: "different-uid", email: "person@example.com" },
   ), false);
   assert.equal(identityMatchesProfile(
     identity,
-    { id: "firebase-uid", email: "other@example.com" },
+    { firebaseUid: "firebase-uid", email: "other@example.com" },
   ), false);
   assert.equal(identityMatchesProfile(
     identity,
-    { id: "firebase-uid", email: "PERSON@example.com " },
+    { firebaseUid: "firebase-uid", email: "PERSON@example.com " },
   ), true);
 });
 

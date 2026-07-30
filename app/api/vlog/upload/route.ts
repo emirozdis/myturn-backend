@@ -18,7 +18,7 @@ import { rateLimit } from "@/lib/rate-limit";
 import { getLocalDateInTimezone, MIN_MEMBERS_FOR_DAILY_ASSIGNMENT } from "@/lib/vlog-helpers";
 import { finalizeUploadedClip as completeUpload } from "@/lib/upload-finalization";
 import { Prisma } from "@prisma/client";
-import { validateRecordingMetadata } from "@/lib/recording-composition";
+import { parseRecordingMetadata, validateRecordingMetadata } from "@/lib/recording-composition";
 
 const BUCKET_NAME = process.env.CLOUDFLARE_R2_BUCKET_NAME || "vlogs";
 const CHUNK_SIZE = 5 * 1024 * 1024;
@@ -185,15 +185,9 @@ async function POSTHandler(req: NextRequest) {
       if (!assignment || memberCount < MIN_MEMBERS_FOR_DAILY_ASSIGNMENT || assignment.group.isFrozen || assignment.isPassed || !["active", "completed"].includes(assignment.status)) {
         return NextResponse.json({ error: "This assignment is not uploadable." }, { status: 403 });
       }
-      if (validatedMetadata.metadata?.prompt && assignment.activePrompt) {
-        const catalogPrompt = await db.prompt.findUnique({
-          where: { text: assignment.activePrompt },
-          select: { id: true },
-        });
-        if (catalogPrompt) {
-          validatedMetadata.metadata.promptId = catalogPrompt.id;
-          validatedMetadata.serialized = JSON.stringify(validatedMetadata.metadata);
-        }
+      if (validatedMetadata.metadata?.prompt && assignment.activePromptId) {
+        validatedMetadata.metadata.promptId = assignment.activePromptId;
+        validatedMetadata.serialized = JSON.stringify(validatedMetadata.metadata);
       }
       const localDate = (await getLocalDateInTimezone(assignment.group.timezone)).toISOString().slice(0, 10);
       if (assignment.date.toISOString().slice(0, 10) !== localDate) {
@@ -258,6 +252,7 @@ async function POSTHandler(req: NextRequest) {
               location: location || null,
               caption: caption || null,
               metadata: validatedMetadata.serialized,
+              metadataJson: validatedMetadata.metadata as Prisma.InputJsonValue ?? Prisma.DbNull,
             },
           });
         }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
@@ -337,13 +332,8 @@ async function POSTHandler(req: NextRequest) {
         const dbVideoUrl = upload.key.startsWith("vlogs/") ? upload.key.slice(6) : upload.key;
         const isPhoto = upload.mediaType === "photo";
         const requestedPromptId = (() => {
-          if (!upload.metadata) return null;
-          try {
-            const value = JSON.parse(upload.metadata)?.promptId;
-            return typeof value === "string" && value ? value : null;
-          } catch {
-            return null;
-          }
+          const value = parseRecordingMetadata(upload.metadataJson ?? upload.metadata)?.promptId;
+          return typeof value === "string" && value ? value : null;
         })();
         const clipPromptId = requestedPromptId
           ? (await db.prompt.findUnique({
@@ -367,6 +357,7 @@ async function POSTHandler(req: NextRequest) {
             mediaType: upload.mediaType,
             promptId: clipPromptId,
             metadata: upload.metadata,
+            metadataJson: upload.metadataJson ?? Prisma.DbNull,
           },
         });
       }

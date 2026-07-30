@@ -14,7 +14,13 @@ async function GETHandler() {
       where: { userId: session.user.id },
     });
 
-    return NextResponse.json({ success: true, unlocked });
+    return NextResponse.json({
+      success: true,
+      unlocked: unlocked.map((achievement) => ({
+        ...achievement,
+        groupId: achievement.groupId ?? "global",
+      })),
+    });
   } catch (error: unknown) {
     throw error;
   }

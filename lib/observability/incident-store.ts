@@ -82,6 +82,11 @@ export async function persistIncident(input: IncidentInput): Promise<void> {
   await db.backendIncident.create({
     data: {
       id: input.id,
+      source: "server",
+      clientRequestId: request?.clientRequestId,
+      operationId: request?.operationId,
+      appSessionId: request?.appSessionId,
+      authState: request?.authState,
       requestId: request?.requestId,
       jobRunId: request?.jobRunId,
       level: input.level,

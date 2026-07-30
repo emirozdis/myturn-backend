@@ -125,7 +125,9 @@ async function POSTHandler(req: NextRequest) {
   }
 
   try {
-    await db.transcoderWebhookEvent.create({ data: { id: eventId, jobId, event } });
+    await db.transcoderWebhookEvent.create({
+      data: { id: eventId, jobId, event: event === "Saved" ? "Saved" : "Error" },
+    });
   } catch (error: unknown) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
       const existing = await db.transcoderWebhookEvent.findUnique({ where: { id: eventId }, select: { processedAt: true } });

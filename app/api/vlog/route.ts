@@ -22,6 +22,7 @@ import {
   MIN_MEMBERS_FOR_DAILY_ASSIGNMENT,
   isAutomaticPassDue,
 } from "@/lib/vlog-helpers";
+import { getVlogTimePeriodForHour, hasVlogInTimePeriod } from "@/lib/business-time";
 import { authorizeMediaRead } from "@/lib/media-authorization";
 import { finalizeUploadedClip } from "@/lib/upload-finalization";
 import { claimCurrentAssignment, passCurrentAssignment } from "@/lib/assignment-transitions";
@@ -69,6 +70,54 @@ async function GETHandler(req: NextRequest) {
     const intent = searchParams.get("intent");
     const groupId = searchParams.get("groupId");
 
+    if (intent === "getTodayTurnState") {
+      if (!groupId) {
+        return NextResponse.json({ error: "Group parameters unresolved" }, { status: 400 });
+      }
+
+      const group = await db.group.findUnique({
+        where: { id: groupId },
+        select: {
+          timezone: true,
+          isFrozen: true,
+          members: { where: { userId: session.user.id }, select: { userId: true } },
+        },
+      });
+      if (!group) {
+        return NextResponse.json({ error: "Group not found" }, { status: 404 });
+      }
+      if (group.members.length === 0) {
+        return NextResponse.json({ error: "Unauthorized. Not a member of this group." }, { status: 403 });
+      }
+
+      const { businessDate } = getVlogCircadianState(group.timezone);
+      const assignment = await db.dailyAssignment.findFirst({
+        where: { groupId, date: businessDate, status: { in: ["active", "completed"] } },
+        select: {
+          id: true,
+          groupId: true,
+          userId: true,
+          isPassed: true,
+          isClaimed: true,
+          passedByUserId: true,
+          status: true,
+          date: true,
+          user: {
+            select: { id: true, name: true, image: true, handle: true, bio: true, location: true },
+          },
+        },
+      });
+
+      return NextResponse.json({
+        success: true,
+        assignment: assignment
+          ? { ...assignment, group: { timezone: group.timezone, isFrozen: group.isFrozen } }
+          : null,
+      }, {
+        headers: { "Cache-Control": "private, no-store" },
+      });
+    }
+
     const isUserPro = await checkUserProStatus(session.user.id);
 
     if (intent === "getOrCreateTodayAssignment") {
@@ -98,7 +147,7 @@ async function GETHandler(req: NextRequest) {
 
       const [promptCatalog, locale] = await Promise.all([
         db.prompt.findMany({
-          select: { text: true, translations: true },
+          select: { id: true, text: true, translations: true },
           orderBy: [{ createdAt: "asc" }, { id: "asc" }],
         }),
         getRequestLocale(req, session.user.id),
@@ -263,13 +312,27 @@ async function GETHandler(req: NextRequest) {
 
       if (fullyPopulatedAssignment && fullyPopulatedAssignment.clips) {
         if (!fullyPopulatedAssignment.activePrompt) {
-          const randomPrompt = promptCatalog[Math.floor(Math.random() * promptCatalog.length)].text;
+          const randomPrompt = promptCatalog[Math.floor(Math.random() * promptCatalog.length)];
 
           await db.dailyAssignment.update({
              where: { id: fullyPopulatedAssignment.id },
-             data: { activePrompt: randomPrompt }
+             data: { activePrompt: randomPrompt.text, activePromptId: randomPrompt.id }
           });
-          fullyPopulatedAssignment.activePrompt = randomPrompt;
+          fullyPopulatedAssignment.activePrompt = randomPrompt.text;
+          fullyPopulatedAssignment.activePromptId = randomPrompt.id;
+        } else if (!fullyPopulatedAssignment.activePromptId) {
+          const catalogPrompt = promptCatalog.find((prompt) => {
+            if (prompt.text === fullyPopulatedAssignment.activePrompt) return true;
+            if (!prompt.translations || typeof prompt.translations !== "object" || Array.isArray(prompt.translations)) return false;
+            return Object.values(prompt.translations).includes(fullyPopulatedAssignment.activePrompt);
+          });
+          if (catalogPrompt) {
+            await db.dailyAssignment.update({
+              where: { id: fullyPopulatedAssignment.id },
+              data: { activePromptId: catalogPrompt.id },
+            });
+            fullyPopulatedAssignment.activePromptId = catalogPrompt.id;
+          }
         }
 
         for (const clip of fullyPopulatedAssignment.clips) {
@@ -805,7 +868,7 @@ async function POSTHandler(req: NextRequest) {
       if (assignment.promptSkips >= 3) return NextResponse.json({ error: "No skips left" }, { status: 400 });
 
       const [prompts, locale] = await Promise.all([
-        db.prompt.findMany({ select: { text: true, translations: true } }),
+        db.prompt.findMany({ select: { id: true, text: true, translations: true } }),
         getRequestLocale(req, session.user.id),
       ]);
       if (prompts.length === 0) {
@@ -831,6 +894,7 @@ async function POSTHandler(req: NextRequest) {
         where: { id: assignmentId },
         data: {
           activePrompt: newPrompt.text,
+          activePromptId: newPrompt.id,
           promptSkips: assignment.promptSkips + 1
         }
       });
@@ -1024,7 +1088,13 @@ async function POSTHandler(req: NextRequest) {
 
       const assignment = await db.dailyAssignment.findUnique({
         where: { id: assignmentId },
-        include: { group: { include: { members: true } } }
+        include: {
+          group: { include: { members: true } },
+          clips: {
+            where: { finalizedAt: { not: null } },
+            select: { recordedAt: true },
+          },
+        }
       });
       
       if (!assignment) return NextResponse.json({ error: "Assignment not found" }, { status: 404 });
@@ -1040,11 +1110,29 @@ async function POSTHandler(req: NextRequest) {
       const circadian = getVlogCircadianState(assignment.group.timezone);
       const isToday = new Date(assignment.date).getTime() === circadian.businessDate.getTime();
 
-      if (!isToday || assignment.status !== "active") {
+      if (
+        !isToday
+        || assignment.isPassed
+        || (assignment.status !== "active" && assignment.status !== "completed")
+      ) {
         return NextResponse.json({ error: "Sadece bugünün aktif görevleri için dürtebilirsiniz." }, { status: 400 });
       }
       if (assignment.userId === session.user.id) {
         return NextResponse.json({ error: "Kendinizi dürtemezsiniz." }, { status: 400 });
+      }
+
+      const activePeriod = getVlogTimePeriodForHour(circadian.currentHour);
+      if (activePeriod === null) {
+        return NextResponse.json({ error: "Şu anda aktif bir paylaşım zaman aralığı yok." }, { status: 400 });
+      }
+
+      const hasPostedInActivePeriod = hasVlogInTimePeriod(
+        assignment.clips.map((clip) => clip.recordedAt),
+        assignment.group.timezone,
+        activePeriod,
+      );
+      if (hasPostedInActivePeriod) {
+        return NextResponse.json({ error: "Vlogger bu zaman aralığında zaten paylaşım yaptı." }, { status: 400 });
       }
 
       await db.poke.create({

@@ -98,6 +98,28 @@ async function GETHandler(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const intent = searchParams.get("intent");
 
+    if (intent === "onboardingStatus") {
+      const profile = await db.profile.findUnique({
+        where: { id: session.user.id },
+        select: {
+          name: true,
+          handle: true,
+        },
+      });
+
+      if (!profile) {
+        return NextResponse.json({ error: "User not found" }, { status: 404 });
+      }
+
+      const response = NextResponse.json({
+        success: true,
+        profileComplete: Boolean(profile.handle),
+        name: profile.name,
+      });
+      response.headers.set("Cache-Control", "no-store");
+      return response;
+    }
+
     if (intent === "usernameAvailability") {
       const availabilityRateLimit = await rateLimit(`username_availability_${session.user.id}`, 30, 60000);
       if (!availabilityRateLimit.success) {
@@ -601,6 +623,7 @@ async function DELETEHandler(req: NextRequest) {
     const user = await db.profile.findUnique({
       where: { id: userId },
       select: {
+        firebaseUid: true,
         email: true,
         image: true,
         groupMembers: {
@@ -742,6 +765,10 @@ async function DELETEHandler(req: NextRequest) {
     if (isManagedStorageKey(user.image)) addStorageKey(avatarKeys, user.image);
     const historicalAvatars = await r2.listObjects("avatars", `avatars/${userId}-`);
     historicalAvatars.forEach((key) => avatarKeys.add(key));
+    if (user.firebaseUid !== userId) {
+      const legacyFirebaseAvatars = await r2.listObjects("avatars", `avatars/${user.firebaseUid}-`);
+      legacyFirebaseAvatars.forEach((key) => avatarKeys.add(key));
+    }
 
     for (const membership of user.groupMembers) {
       if (!groupsToDelete.includes(membership.groupId)) continue;
@@ -763,8 +790,8 @@ async function DELETEHandler(req: NextRequest) {
       feedbackScreenshots.length ? r2.deleteObjects("feedback", feedbackScreenshots) : Promise.resolve(),
     ]);
 
-    await deleteRevenueCatCustomer(userId);
-    await deleteFirebaseIdentity(userId);
+    await deleteRevenueCatCustomer(user.firebaseUid);
+    await deleteFirebaseIdentity(user.firebaseUid);
 
     const affectedGroupIds = Array.from(new Set([
       ...user.groupMembers.map((membership) => membership.groupId),
@@ -796,7 +823,9 @@ async function DELETEHandler(req: NextRequest) {
 
       // Diagnostic incidents may contain the user's internal ID. Remove them
       // as part of the same account-deletion transaction.
-      await tx.backendIncident.deleteMany({ where: { userId } });
+      await tx.backendIncident.deleteMany({
+        where: { OR: [{ userId }, { reportedUserId: userId }] },
+      });
 
       await tx.profile.delete({ where: { id: userId } });
 

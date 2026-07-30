@@ -262,11 +262,11 @@ export async function rollGroupAssignmentForDate(groupId: string, localDate: Dat
   const chosenMember = finalPool[Math.floor(Math.random() * finalPool.length)];
   const finalUserId = forceUserId ? forceUserId : chosenMember.userId;
 
-  const prompts = await db.prompt.findMany({ select: { text: true } });
+  const prompts = await db.prompt.findMany({ select: { id: true, text: true } });
   if (prompts.length === 0) {
     throw new Error("Cannot create a daily assignment because no prompts are configured.");
   }
-  const randomPrompt = prompts[Math.floor(Math.random() * prompts.length)].text;
+  const randomPrompt = prompts[Math.floor(Math.random() * prompts.length)];
 
   let assignment;
   try {
@@ -278,7 +278,8 @@ export async function rollGroupAssignmentForDate(groupId: string, localDate: Dat
         status: "active",
         isVolunteer,
         isMandatory: !!forceUserId,
-        activePrompt: randomPrompt,
+        activePrompt: randomPrompt.text,
+        activePromptId: randomPrompt.id,
       },
     });
   } catch (error) {
@@ -321,29 +322,17 @@ export async function rollGroupAssignmentForDate(groupId: string, localDate: Dat
   return assignment;
 }
 
-export async function checkAndUnlockAchievement(userId: string, achievementId: string, groupId: string = "global"): Promise<boolean> {
+export async function checkAndUnlockAchievement(userId: string, achievementId: string, groupId: string | null = null): Promise<boolean> {
   try {
-    const existing = await db.unlockedAchievement.findUnique({
-      where: {
-        userId_achievementId_groupId: {
-          userId,
-          achievementId,
-          groupId,
-        },
-      },
+    const created = await db.unlockedAchievement.createMany({
+      data: [{
+        userId,
+        achievementId,
+        groupId,
+      }],
+      skipDuplicates: true,
     });
-
-    if (!existing) {
-      await db.unlockedAchievement.create({
-        data: {
-          userId,
-          achievementId,
-          groupId,
-        },
-      });
-      return true;
-    }
-    return false;
+    return created.count === 1;
   } catch (err) {
     reportError("achievement.unlock_failed", err, { userId, achievementId, groupId });
     return false;

@@ -84,3 +84,20 @@ export function getBusinessDate(timezone: string, at = new Date()): Date {
 export function getBusinessHour(at: Date | string, timezone: string): number {
   return getBusinessClock(new Date(at), timezone).hour;
 }
+
+export function getVlogTimePeriodForHour(hour: number): number | null {
+  if (!Number.isInteger(hour) || hour < 9 || hour >= 24) return null;
+  return Math.floor((hour - 9) / 3);
+}
+
+export function getVlogTimePeriod(recordedAt: Date | string, timezone: string): number | null {
+  return getVlogTimePeriodForHour(getBusinessHour(recordedAt, timezone));
+}
+
+export function hasVlogInTimePeriod(
+  recordedAts: readonly (Date | string)[],
+  timezone: string,
+  period: number,
+): boolean {
+  return recordedAts.some((recordedAt) => getVlogTimePeriod(recordedAt, timezone) === period);
+}

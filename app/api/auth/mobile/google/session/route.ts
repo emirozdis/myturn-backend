@@ -6,6 +6,7 @@ import { getFirebaseAuth } from "@/lib/firebase-admin";
 
 async function ensureFirebaseIdentity(profile: {
   id: string;
+  firebaseUid: string;
   email: string | null;
   name: string | null;
   image: string | null;
@@ -14,7 +15,7 @@ async function ensureFirebaseIdentity(profile: {
   const auth = getFirebaseAuth();
 
   try {
-    await auth.updateUser(profile.id, {
+    await auth.updateUser(profile.firebaseUid, {
       email: profile.email,
       emailVerified: true,
       displayName: profile.name || undefined,
@@ -29,7 +30,7 @@ async function ensureFirebaseIdentity(profile: {
 
     try {
       const emailIdentity = await auth.getUserByEmail(profile.email);
-      if (emailIdentity.uid !== profile.id) {
+      if (emailIdentity.uid !== profile.firebaseUid) {
         throw new Error("Firebase email is linked to a different profile.");
       }
     } catch (emailError: unknown) {
@@ -38,7 +39,7 @@ async function ensureFirebaseIdentity(profile: {
         : "";
       if (emailCode !== "auth/user-not-found") throw emailError;
       await auth.createUser({
-        uid: profile.id,
+        uid: profile.firebaseUid,
         email: profile.email,
         emailVerified: true,
         displayName: profile.name || undefined,
@@ -47,7 +48,7 @@ async function ensureFirebaseIdentity(profile: {
     }
   }
 
-  return auth.createCustomToken(profile.id, { myturnProfile: true });
+  return auth.createCustomToken(profile.firebaseUid, { myturnProfile: true });
 }
 
 async function POSTHandler(req: NextRequest) {
@@ -76,7 +77,7 @@ async function POSTHandler(req: NextRequest) {
 
   const profile = await db.profile.findUnique({
     where: { id: handoff.userId },
-    select: { id: true, email: true, name: true, image: true },
+    select: { id: true, firebaseUid: true, email: true, name: true, image: true },
   });
   if (!profile) {
     return NextResponse.json({ error: "Account not found." }, { status: 404 });

@@ -16,7 +16,7 @@ async function POSTHandler(req: NextRequest) {
   const profile = normalized ? await db.profile.findUnique({ where: { email: normalized } }) : null;
   if (profile) {
     try {
-      const firebaseUser = await getFirebaseAuth().getUser(profile.id);
+      const firebaseUser = await getFirebaseAuth().getUser(profile.firebaseUid);
       const hasPasswordProvider = firebaseUser.providerData.some(
         (provider) => provider.providerId === "password",
       );

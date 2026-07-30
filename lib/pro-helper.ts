@@ -22,8 +22,14 @@ export async function checkUserProStatus(userId: string): Promise<boolean> {
   }
 
   try {
+    const profile = await prisma.profile.findUnique({
+      where: { id: userId },
+      select: { firebaseUid: true },
+    });
+    if (!profile) return false;
+    const revenueCatUserId = profile.firebaseUid;
     logger.debug({ event: "revenuecat.entitlement_check_started", userId }, "Checking RevenueCat entitlement");
-    const res = await fetch(`https://api.revenuecat.com/v1/subscribers/${userId}`, {
+    const res = await fetch(`https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(revenueCatUserId)}`, {
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json"

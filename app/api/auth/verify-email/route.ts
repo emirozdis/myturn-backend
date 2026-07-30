@@ -22,14 +22,14 @@ async function POSTHandler(req: NextRequest) {
 
   const profile = await db.profile.findUnique({
     where: { email: normalized },
-    select: { id: true },
+    select: { id: true, firebaseUid: true },
   });
   if (!profile) {
     return NextResponse.json({ error: "This verification code is invalid or expired." }, { status: 400 });
   }
 
   const auth = getFirebaseAuth();
-  await auth.updateUser(profile.id, { emailVerified: true });
+  await auth.updateUser(profile.firebaseUid, { emailVerified: true });
   const consumed = await consumeValidatedAuthCode(codeRecord);
   if (!consumed) {
     return NextResponse.json({ error: "This verification code is invalid or expired." }, { status: 400 });
@@ -38,7 +38,7 @@ async function POSTHandler(req: NextRequest) {
     where: { id: profile.id },
     data: { emailVerified: new Date() },
   });
-  await auth.revokeRefreshTokens(profile.id);
+  await auth.revokeRefreshTokens(profile.firebaseUid);
   return NextResponse.json({ success: true });
 }
 

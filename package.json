@@ -9,6 +9,7 @@
     "lint": "eslint",
     "test": "tsx --test tests/observability/*.test.ts",
     "check:observability": "node scripts/check-observability.mjs",
+    "restore:email-user": "node scripts/restore-email-user.js",
     "db:migrate:deploy": "prisma migrate deploy",
     "db:migrate:status": "prisma migrate status",
     "db:migrate:verify": "prisma migrate diff --exit-code --from-config-datasource --to-schema prisma/schema.prisma",

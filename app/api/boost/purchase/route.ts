@@ -48,7 +48,14 @@ async function POSTHandler(req: NextRequest) {
       });
     }
 
-    const response = await fetch(`https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(session.user.id)}`, {
+    const profile = await db.profile.findUnique({
+      where: { id: session.user.id },
+      select: { firebaseUid: true },
+    });
+    if (!profile) {
+      return NextResponse.json({ error: "Account not found." }, { status: 404 });
+    }
+    const response = await fetch(`https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(profile.firebaseUid)}`, {
       headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
       cache: "no-store",
       signal: AbortSignal.timeout(8_000),

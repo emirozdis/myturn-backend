@@ -38,10 +38,10 @@ async function POSTHandler(req: NextRequest) {
 
   try {
     const auth = getFirebaseAuth();
-    await auth.updateUser(session.user.id, {
+    await auth.updateUser(session.firebase.uid, {
       password: newPassword,
     });
-    await auth.revokeRefreshTokens(session.user.id);
+    await auth.revokeRefreshTokens(session.firebase.uid);
   } catch {
     return NextResponse.json(
       { error: "Password update is temporarily unavailable.", code: "PASSWORD_UPDATE_FAILED" },

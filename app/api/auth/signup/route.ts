@@ -78,10 +78,10 @@ async function POSTHandler(req: NextRequest) {
     const normalizedName = name.trim();
 
     const existingProfile = await db.profile.findFirst({
-      where: { OR: [{ id: firebaseUser.uid }, { email: emailNormalized }] },
+      where: { OR: [{ firebaseUid: firebaseUser.uid }, { email: emailNormalized }] },
     });
 
-    if (existingProfile && existingProfile.id !== firebaseUser.uid) {
+    if (existingProfile && existingProfile.firebaseUid !== firebaseUser.uid) {
       return NextResponse.json(
         { error: "This Firebase identity conflicts with an existing profile." },
         { status: 409 }
@@ -92,9 +92,9 @@ async function POSTHandler(req: NextRequest) {
       await getFirebaseAuth().updateUser(firebaseUser.uid, { displayName: normalizedName });
       const profile = await db.$transaction(async (tx) => {
         const provisioned = await tx.profile.upsert({
-          where: { id: firebaseUser.uid },
+          where: { firebaseUid: firebaseUser.uid },
           create: {
-            id: firebaseUser.uid,
+            firebaseUid: firebaseUser.uid,
             name: normalizedName,
             email: emailNormalized,
           },
@@ -132,7 +132,7 @@ async function POSTHandler(req: NextRequest) {
     } catch (provisioningError) {
       await db.verificationToken.deleteMany({ where: { identifier: `verify:${emailNormalized}` } });
       if (!existingProfile) {
-        await db.profile.deleteMany({ where: { id: firebaseUser.uid } });
+        await db.profile.deleteMany({ where: { firebaseUid: firebaseUser.uid } });
         try {
           await getFirebaseAuth().deleteUser(firebaseUser.uid);
         } catch {}

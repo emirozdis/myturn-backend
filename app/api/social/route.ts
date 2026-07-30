@@ -7,6 +7,7 @@ import { sendPushToUser } from "@/lib/push-server";
 import { rateLimit } from "@/lib/rate-limit";
 import { generateEdgeUrl } from "@/lib/media-signing";
 import { getBusinessDate } from "@/lib/business-time";
+import { Prisma } from "@prisma/client";
 
 async function GETHandler() {
   try {
@@ -311,13 +312,24 @@ async function POSTHandler(req: NextRequest) {
         return NextResponse.json({ error: "Bu kullanıcıyla zaten bir arkadaşlığınız veya bekleyen bir isteğiniz var." }, { status: 400 });
       }
 
-      const friendship = await db.friendship.create({
-        data: {
-          requesterId: session.user.id,
-          addresseeId: resolvedTargetUserId,
-          status: "pending"
+      let friendship;
+      try {
+        friendship = await db.friendship.create({
+          data: {
+            requesterId: session.user.id,
+            addresseeId: resolvedTargetUserId,
+            status: "pending"
+          }
+        });
+      } catch (error) {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+          return NextResponse.json(
+            { error: "Bu kullanıcıyla zaten bir arkadaşlığınız veya bekleyen bir isteğiniz var." },
+            { status: 409 },
+          );
         }
-      });
+        throw error;
+      }
 
       const requester = await db.profile.findUnique({ where: { id: session.user.id }});
       await sendPushToUser(resolvedTargetUserId, {

@@ -22,6 +22,23 @@ export type ValidatedRecordingMetadata = Record<string, unknown> & {
   prompt?: string;
 };
 
+export function parseRecordingMetadata(value: unknown): ValidatedRecordingMetadata | null {
+  if (!value) return null;
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? parsed as ValidatedRecordingMetadata
+        : null;
+    } catch {
+      return null;
+    }
+  }
+  return typeof value === "object" && !Array.isArray(value)
+    ? value as ValidatedRecordingMetadata
+    : null;
+}
+
 const MAX_SEGMENTS = 64;
 const MAX_SOURCE_DURATION_MS = 125_000;
 const MAX_SNIPPET_SOURCE_DURATION_MS = 6_000;
@@ -44,14 +61,9 @@ export function validateRecordingMetadata(
     throw new Error("Upload metadata is invalid or too large.");
   }
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(rawMetadata);
-  } catch {
+  const parsed = parseRecordingMetadata(rawMetadata);
+  if (!parsed) {
     throw new Error("Upload metadata is not valid JSON.");
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("Upload metadata must be an object.");
   }
 
   const metadata = parsed as ValidatedRecordingMetadata;

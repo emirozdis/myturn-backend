@@ -9,7 +9,7 @@ import {
 } from "@/lib/vlog-helpers";
 import { finalizeUploadedClip as completeUpload } from "@/lib/upload-finalization";
 import { r2 } from "@/lib/r2";
-import { getBusinessClock, getBusinessHour } from "@/lib/business-time";
+import { getBusinessClock, getVlogTimePeriod } from "@/lib/business-time";
 import { passCurrentAssignment } from "@/lib/assignment-transitions";
 import { logInfo, reportWarning } from "@/lib/observability/logger";
 import { cleanupExpiredIncidents } from "@/lib/observability/incident-store";
@@ -38,14 +38,7 @@ function getSlotForHour(hour: number): number | null {
 }
 
 function getSlotForClip(recordedAt: Date | string, timezone?: string): number {
-  const hours = getBusinessHour(recordedAt, timezone || "UTC");
-
-  if (hours >= 9 && hours < 12) return 0;
-  if (hours >= 12 && hours < 15) return 1;
-  if (hours >= 15 && hours < 18) return 2;
-  if (hours >= 18 && hours < 21) return 3;
-  if (hours >= 21 && hours < 24) return 4;
-  return 5;
+  return getVlogTimePeriod(recordedAt, timezone || "UTC") ?? 5;
 }
 
 async function runFrozenGroupEvaluation(): Promise<CronJobResult> {

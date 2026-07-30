@@ -6,7 +6,7 @@ import { startTranscodeJob } from "@/lib/transcoder";
 import { sendPushToUser } from "@/lib/push-server";
 import { getBusinessClock } from "@/lib/business-time";
 import { reportError } from "@/lib/observability/logger";
-import type { RecordingComposition } from "@/lib/recording-composition";
+import { parseRecordingMetadata, type RecordingComposition } from "@/lib/recording-composition";
 
 const MAX_VIDEO_BYTES = 250 * 1024 * 1024;
 const MAX_PHOTO_BYTES = 20 * 1024 * 1024;
@@ -26,23 +26,25 @@ type FinalizationResult = {
   individualTierUp?: { from: string; to: string } | null;
 };
 
-function isPhotoClip(clip: { mediaType: string; metadata: string | null }) {
-  if (clip.mediaType === "photo") return true;
-  try {
-    return JSON.parse(clip.metadata || "{}").mediaType === "photo";
-  } catch {
-    return false;
-  }
+function clipMetadata(clip: { metadata: unknown; metadataJson: unknown }) {
+  return parseRecordingMetadata(clip.metadataJson ?? clip.metadata);
 }
 
-async function unlock(tx: Prisma.TransactionClient, userId: string, achievementId: string, groupId = "global") {
-  const existing = await tx.unlockedAchievement.findUnique({
-    where: { userId_achievementId_groupId: { userId, achievementId, groupId } },
-    select: { id: true },
+function isPhotoClip(clip: { mediaType: string; metadata: unknown; metadataJson: unknown }) {
+  if (clip.mediaType === "photo") return true;
+  return clipMetadata(clip)?.mediaType === "photo";
+}
+
+async function unlock(tx: Prisma.TransactionClient, userId: string, achievementId: string, groupId: string | null = null) {
+  const created = await tx.unlockedAchievement.createMany({
+    data: [{
+      userId,
+      achievementId,
+      groupId,
+    }],
+    skipDuplicates: true,
   });
-  if (existing) return false;
-  await tx.unlockedAchievement.create({ data: { userId, achievementId, groupId } });
-  return true;
+  return created.count === 1;
 }
 
 async function inSerializableTransaction<T>(work: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
@@ -82,11 +84,16 @@ async function dispatchTranscode(clipId: string) {
   const outputHlsPath = hlsDir ? `${hlsDir}/${clip.id}_hls` : `${clip.id}_hls`;
   let facingMode: "user" | "environment" = "user";
   let composition: RecordingComposition | undefined;
-  try {
-    const metadata = JSON.parse(clip.metadata || "{}");
-    if (metadata.facingMode === "environment") facingMode = "environment";
-    if (metadata.composition?.version === 1) composition = metadata.composition;
-  } catch {}
+  const metadata = clipMetadata(clip);
+  if (metadata?.facingMode === "environment") facingMode = "environment";
+  if (
+    metadata?.composition
+    && typeof metadata.composition === "object"
+    && "version" in metadata.composition
+    && metadata.composition.version === 1
+  ) {
+    composition = metadata.composition as RecordingComposition;
+  }
 
   try {
     const transcodeJobId = await startTranscodeJob(

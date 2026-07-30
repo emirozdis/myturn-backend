@@ -20,14 +20,17 @@ async function POSTHandler(req: NextRequest) {
     return NextResponse.json({ error: "This reset code is invalid or expired." }, { status: 400 });
   }
   
-  const profile = await db.profile.findUnique({ where: { email: normalized }, select: { id: true } });
+  const profile = await db.profile.findUnique({
+    where: { email: normalized },
+    select: { id: true, firebaseUid: true },
+  });
   if (!profile) {
     return NextResponse.json({ error: "This reset code is invalid or expired." }, { status: 400 });
   }
 
   try {
     const auth = getFirebaseAuth();
-    const firebaseUser = await auth.getUser(profile.id);
+    const firebaseUser = await auth.getUser(profile.firebaseUid);
     const hasPasswordProvider = firebaseUser.providerData.some(
       (provider) => provider.providerId === "password",
     );
@@ -38,12 +41,12 @@ async function POSTHandler(req: NextRequest) {
       return NextResponse.json({ error: "This reset code is invalid or expired." }, { status: 400 });
     }
 
-    await auth.updateUser(profile.id, { password });
+    await auth.updateUser(profile.firebaseUid, { password });
     const consumed = await consumeValidatedAuthCode(codeRecord);
     if (!consumed) {
       return NextResponse.json({ error: "This reset code is invalid or expired." }, { status: 400 });
     }
-    await auth.revokeRefreshTokens(profile.id);
+    await auth.revokeRefreshTokens(profile.firebaseUid);
   } catch {
     return NextResponse.json(
       { error: "Password reset is temporarily unavailable. Your code remains valid." },

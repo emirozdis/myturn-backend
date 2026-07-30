@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { randomUUID } from "crypto";
 import { OAuth2Client } from "google-auth-library";
 import { withApiHandler } from "@/lib/observability/api-handler";
 import { db } from "@/lib/db";
@@ -66,6 +67,7 @@ async function GETHandler(req: NextRequest) {
       return redirectError("registration_disabled");
     }
 
+    const newProfileId = randomUUID();
     const user = await db.$transaction(async (tx) => {
       const resolvedUser = existingUser
         ? await tx.profile.update({
@@ -75,6 +77,8 @@ async function GETHandler(req: NextRequest) {
           })
         : await tx.profile.create({
             data: {
+              id: newProfileId,
+              firebaseUid: newProfileId,
               email,
               emailVerified: new Date(),
               name: profile.name || email.split("@")[0],

@@ -7,9 +7,85 @@ datasource db {
   provider = "postgresql"
 }
 
+enum Locale {
+  en
+  tr
+}
+
+enum GroupRole {
+  member
+  admin
+}
+
+enum AssignmentStatus {
+  active
+  completed
+  missed
+}
+
+enum FriendshipStatus {
+  pending
+  accepted
+}
+
+enum MediaType {
+  vlog
+  photo
+  snippet
+}
+
+enum TranscodeStatus {
+  UPLOADING
+  QUEUED
+  DISPATCHING
+  PROCESSING
+  COMPLETED
+  FAILED
+  FAILED_PERMANENTLY
+}
+
+enum StorageTier {
+  HOT
+  MIGRATING
+  COLD
+  PRUNED
+  FAILED_MIGRATION
+}
+
+enum ActiveUploadStatus {
+  INITIATED
+  COMPLETING
+  ASSEMBLED
+  FINALIZED
+  PUBLISHED
+  LEGACY_REJECTED
+}
+
+enum FeedbackCategory {
+  bug
+  idea
+  other
+}
+
+enum IncidentSource {
+  server
+  client
+}
+
+enum IncidentLevel {
+  warn
+  error
+  fatal
+}
+
+enum TranscoderEvent {
+  Saved
+  Error
+}
+
 model Account {
-  id                String @id @default(uuid())
-  userId            String
+  id                String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId            String @db.Uuid
   type              String
   provider          String
   providerAccountId String
@@ -22,13 +98,14 @@ model Account {
 }
 
 model Profile {
-  id            String    @id @default(uuid())
-  name          String?
-  email         String?   @unique
-  emailVerified DateTime?
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  firebaseUid   String    @unique
+  name          String
+  email         String    @unique
+  emailVerified DateTime? @db.Timestamptz(3)
   image         String?
   boostCredits  Int       @default(0)
-  locale        String    @default("en")
+  locale        Locale    @default(en)
 
   notifyTurns        Boolean @default(true)
   notifyReminders    Boolean @default(true)
@@ -41,12 +118,13 @@ model Profile {
   handle   String? @unique
   location String? @default("Phuket, Thailand")
 
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   accounts Account[]
 
   groupMembers         GroupMember[]
-  dailyAssignments     DailyAssignment[]
+  dailyAssignments     DailyAssignment[]     @relation("AssignmentOwner")
+  assignmentsPassed    DailyAssignment[]     @relation("AssignmentPasser")
   clips                Clip[]
   reactions            Reaction[]
   photoResponses       PhotoResponse[]
@@ -70,15 +148,15 @@ model Profile {
 }
 
 model AgreementAcceptance {
-  id                   String   @id @default(uuid())
-  userId               String
+  id                   String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId               String   @db.Uuid
   agreementSlug        String
   agreementVersion     String
-  agreementEffectiveAt DateTime
+  agreementEffectiveAt DateTime @db.Timestamptz(3)
   titleSnapshot        String
   contentSnapshot      String   @db.Text
   contentHash          String
-  acceptedAt           DateTime @default(now())
+  acceptedAt           DateTime @default(now()) @db.Timestamptz(3)
   ipAddress            String?
   userAgent            String?  @db.Text
 
@@ -90,21 +168,21 @@ model AgreementAcceptance {
 }
 
 model FeedbackReport {
-  id                 String   @id @default(uuid())
-  userId             String
-  category           String
-  message            String   @db.Text
+  id                 String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId             String           @db.Uuid
+  category           FeedbackCategory
+  message            String           @db.Text
   screen             String?
   appVersion         String?
   screenshotPath     String?
-  logs               String?  @db.Text
-  deviceInfo         String?  @db.Text
-  includedScreenshot Boolean  @default(false)
-  includedLogs       Boolean  @default(false)
-  includedDeviceInfo Boolean  @default(false)
-  status             String   @default("open")
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  logs               String?          @db.Text
+  deviceInfo         String?          @db.Text
+  includedScreenshot Boolean          @default(false)
+  includedLogs       Boolean          @default(false)
+  includedDeviceInfo Boolean          @default(false)
+  status             String           @default("open")
+  createdAt          DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime         @default(now()) @updatedAt @db.Timestamptz(3)
 
   user Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -114,28 +192,52 @@ model FeedbackReport {
 }
 
 model BackendIncident {
-  id           String   @id
-  requestId    String?
-  jobRunId     String?
-  level        String
-  event        String
-  code         String?
-  route        String?
-  method       String?
-  status       Int?
-  userId       String?
-  groupId      String?
-  clipId       String?
-  errorType    String?
-  errorMessage String?  @db.Text
-  stack        String?  @db.Text
-  context      Json?
-  environment  String
-  release      String
-  createdAt    DateTime @default(now())
-  expiresAt    DateTime
+  id                 String               @id @db.Uuid
+  source             IncidentSource       @default(server)
+  clientIncidentId   String?              @unique
+  clientRequestId    String?
+  operationId        String?
+  installationIdHash String?
+  appSessionId       String?
+  authState          String?
+  reportedUserId     String?
+  fingerprint        String?
+  occurredAt         DateTime?            @db.Timestamptz(3)
+  receivedAt         DateTime             @default(now()) @db.Timestamptz(3)
+  durationMs         Int?
+  retryNumber        Int?
+  recovered          Boolean?
+  deviceContext      Json?
+  networkContext     Json?
+  appContext         Json?
+  finalizedAt        DateTime?            @db.Timestamptz(3)
+  requestId          String?
+  jobRunId           String?
+  level              IncidentLevel
+  event              String
+  code               String?
+  route              String?
+  method             String?
+  status             Int?
+  userId             String?
+  groupId            String?
+  clipId             String?
+  errorType          String?
+  errorMessage       String?              @db.Text
+  stack              String?              @db.Text
+  context            Json?
+  environment        String
+  release            String
+  createdAt          DateTime             @default(now()) @db.Timestamptz(3)
+  expiresAt          DateTime             @db.Timestamptz(3)
+  breadcrumbs        IncidentBreadcrumb[]
 
   @@index([requestId])
+  @@index([clientRequestId])
+  @@index([operationId])
+  @@index([installationIdHash, occurredAt])
+  @@index([userId, occurredAt])
+  @@index([fingerprint, occurredAt])
   @@index([jobRunId])
   @@index([level, createdAt])
   @@index([event, createdAt])
@@ -143,46 +245,68 @@ model BackendIncident {
   @@map("backend_incidents")
 }
 
+model IncidentBreadcrumb {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  incidentId String   @db.Uuid
+  sequence   Int
+  phase      String
+  occurredAt DateTime @db.Timestamptz(3)
+  category   String
+  name       String
+  outcome    String?
+  durationMs Int?
+  status     Int?
+  code       String?
+  context    Json?
+
+  incident BackendIncident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+
+  @@unique([incidentId, sequence])
+  @@index([incidentId, occurredAt])
+  @@map("incident_breadcrumbs")
+}
+
 model VerificationToken {
-  id         String   @id @default(uuid())
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   identifier String
   token      String   @unique
-  expires    DateTime
+  expires    DateTime @db.Timestamptz(3)
 
   @@unique([identifier, token])
   @@map("verification_tokens")
 }
 
 model Group {
-  id         String   @id @default(uuid())
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name       String
   inviteCode String   @unique
   timezone   String   @default("UTC")
   image      String? // Replaced emoji with image
-  createdAt  DateTime @default(now())
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
 
   xp    Int @default(0)
   level Int @default(1)
 
-  boostGracePeriodEndsAt DateTime?
+  boostGracePeriodEndsAt DateTime? @db.Timestamptz(3)
   isFrozen               Boolean   @default(false)
 
-  members          GroupMember[]
-  dailyAssignments DailyAssignment[]
-  clips            Clip[]
-  volunteers       Volunteer[]
-  boosts           GroupBoost[]
-  activeUploads    ActiveUpload[]
-  xpEvents         GroupMemberXpEvent[]
+  members              GroupMember[]
+  dailyAssignments     DailyAssignment[]
+  clips                Clip[]
+  volunteers           Volunteer[]
+  boosts               GroupBoost[]
+  activeUploads        ActiveUpload[]
+  xpEvents             GroupMemberXpEvent[]
+  unlockedAchievements UnlockedAchievement[]
 
   @@map("groups")
 }
 
 model GroupBoost {
-  id        String   @id @default(uuid())
-  groupId   String
-  userId    String
-  createdAt DateTime @default(now())
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  groupId   String   @db.Uuid
+  userId    String   @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   group Group   @relation(fields: [groupId], references: [id], onDelete: Cascade)
   user  Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -193,47 +317,50 @@ model GroupBoost {
 }
 
 model GroupMember {
-  id       String   @id @default(uuid())
-  groupId  String
-  userId   String
-  role     String   @default("member")
-  streak   Int      @default(0)
-  joinedAt DateTime @default(now())
+  id       String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  groupId  String    @db.Uuid
+  userId   String    @db.Uuid
+  role     GroupRole @default(member)
+  streak   Int       @default(0)
+  joinedAt DateTime  @default(now()) @db.Timestamptz(3)
 
   xp           Int      @default(0)
-  lastActiveAt DateTime @default(now())
+  lastActiveAt DateTime @default(now()) @db.Timestamptz(3)
 
-  group    Group                @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  user     Profile              @relation(fields: [userId], references: [id], onDelete: Cascade)
-  xpEvents GroupMemberXpEvent[]
+  group      Group                @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user       Profile              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  xpEvents   GroupMemberXpEvent[]
+  volunteers Volunteer[]
 
+  @@unique([id, groupId])
   @@unique([groupId, userId])
-  @@index([groupId])
   @@index([userId])
+  @@index([groupId, lastActiveAt])
   @@map("group_members")
 }
 
 model Prompt {
-  id           String   @id @default(uuid())
-  text         String   @unique
-  translations Json     @default("{}")
-  createdAt    DateTime @default(now())
+  id           String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  text         String            @unique
+  translations Json              @default("{}")
+  createdAt    DateTime          @default(now()) @db.Timestamptz(3)
   clips        Clip[]
+  assignments  DailyAssignment[]
 
   @@map("prompts")
 }
 
 model GroupMemberXpEvent {
-  id            String   @id @default(uuid())
-  groupId       String
-  groupMemberId String
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  groupId       String   @db.Uuid
+  groupMemberId String   @db.Uuid
   businessDate  DateTime @db.Date
   reason        String
   amount        Int
-  createdAt     DateTime @default(now())
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
 
   group  Group       @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  member GroupMember @relation(fields: [groupMemberId], references: [id], onDelete: Cascade)
+  member GroupMember @relation(fields: [groupMemberId, groupId], references: [id, groupId], onDelete: Cascade)
 
   @@unique([groupId, groupMemberId, businessDate, reason])
   @@index([groupMemberId, businessDate])
@@ -241,107 +368,116 @@ model GroupMemberXpEvent {
 }
 
 model DailyAssignment {
-  id            String   @id @default(uuid())
-  groupId       String
-  userId        String
-  date          DateTime @db.Date
-  status        String   @default("active")
-  isVolunteer   Boolean  @default(false)
-  recapNotified Boolean  @default(false)
-  createdAt     DateTime @default(now())
+  id            String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  groupId       String           @db.Uuid
+  userId        String           @db.Uuid
+  date          DateTime         @db.Date
+  status        AssignmentStatus @default(active)
+  isVolunteer   Boolean          @default(false)
+  recapNotified Boolean          @default(false)
+  createdAt     DateTime         @default(now()) @db.Timestamptz(3)
 
-  activePrompt String?
-  promptSkips  Int     @default(0)
+  activePrompt   String?
+  activePromptId String? @db.Uuid
+  promptSkips    Int     @default(0)
 
   isPassed       Boolean @default(false)
-  passedByUserId String?
+  passedByUserId String? @db.Uuid
   isClaimed      Boolean @default(false)
   isMandatory    Boolean @default(false)
 
-  group Group   @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  user  Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
-  clips Clip[]
-  pokes Poke[]
+  group         Group          @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user          Profile        @relation("AssignmentOwner", fields: [userId], references: [id], onDelete: Cascade)
+  passedByUser  Profile?       @relation("AssignmentPasser", fields: [passedByUserId], references: [id], onDelete: SetNull)
+  prompt        Prompt?        @relation(fields: [activePromptId], references: [id], onDelete: SetNull)
+  clips         Clip[]
+  pokes         Poke[]
+  activeUploads ActiveUpload[]
 
+  @@unique([id, groupId, userId])
   @@unique([groupId, date])
-  @@index([groupId])
   @@index([userId])
   @@index([date])
+  @@index([activePromptId])
+  @@index([groupId, status, date])
+  @@index([userId, status, date])
   @@map("daily_assignments")
 }
 
 model Volunteer {
-  id         String   @id @default(uuid())
-  groupId    String
-  userId     String
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  groupId    String   @db.Uuid
+  userId     String   @db.Uuid
   targetDate DateTime @db.Date
-  createdAt  DateTime @default(now())
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
 
-  group Group   @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  user  Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
+  group      Group       @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user       Profile     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  membership GroupMember @relation(fields: [groupId, userId], references: [groupId, userId], onDelete: Cascade)
 
   @@unique([groupId, userId, targetDate])
-  @@index([groupId])
   @@index([userId])
   @@index([targetDate])
   @@map("volunteers")
 }
 
 model Poke {
-  id           String   @id @default(uuid())
-  assignmentId String
-  pokerId      String
-  createdAt    DateTime @default(now())
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  assignmentId String   @db.Uuid
+  pokerId      String   @db.Uuid
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
 
   assignment DailyAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
   poker      Profile         @relation(fields: [pokerId], references: [id], onDelete: Cascade)
 
   @@index([assignmentId])
   @@index([pokerId])
+  @@index([assignmentId, pokerId, createdAt])
   @@map("pokes")
 }
 
 model Friendship {
-  id          String   @id @default(uuid())
-  requesterId String
-  addresseeId String
-  status      String   @default("pending")
-  createdAt   DateTime @default(now())
+  id          String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  requesterId String           @db.Uuid
+  addresseeId String           @db.Uuid
+  status      FriendshipStatus @default(pending)
+  createdAt   DateTime         @default(now()) @db.Timestamptz(3)
 
   requester Profile @relation("FriendRequestsSent", fields: [requesterId], references: [id], onDelete: Cascade)
   addressee Profile @relation("FriendRequestsReceived", fields: [addresseeId], references: [id], onDelete: Cascade)
 
   @@unique([requesterId, addresseeId])
-  @@index([requesterId])
-  @@index([addresseeId])
+  @@index([requesterId, status, createdAt])
+  @@index([addresseeId, status, createdAt])
   @@map("friendships")
 }
 
 model Clip {
-  id                  String    @id @default(cuid())
-  assignmentId        String
-  userId              String
-  groupId             String
+  id                  String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  assignmentId        String          @db.Uuid
+  userId              String          @db.Uuid
+  groupId             String          @db.Uuid
   videoUrl            String
   thumbnailUrl        String
   thumbnailBlurUrl    String?
   hlsUrl              String?
-  transcodeStatus     String    @default("UPLOADING")
-  transcodeAttempts   Int       @default(0)
-  transcodeJobId      String?   @unique
-  transcodeDispatchAt DateTime?
-  mediaType           String    @default("vlog")
+  transcodeStatus     TranscodeStatus @default(UPLOADING)
+  transcodeAttempts   Int             @default(0)
+  transcodeJobId      String?         @unique
+  transcodeDispatchAt DateTime?       @db.Timestamptz(3)
+  mediaType           MediaType       @default(vlog)
 
-  storageTier String    @default("HOT")
-  archivedAt  DateTime?
+  storageTier StorageTier @default(HOT)
+  archivedAt  DateTime?   @db.Timestamptz(3)
 
-  location    String?
-  promptId    String?
-  metadata    String?   @db.Text
-  recordedAt  DateTime  @default(now())
-  finalizedAt DateTime?
+  location     String?
+  promptId     String?   @db.Uuid
+  metadata     String?   @db.Text
+  metadataJson Json?     @map("metadata_json")
+  recordedAt   DateTime  @default(now()) @db.Timestamptz(3)
+  finalizedAt  DateTime? @db.Timestamptz(3)
 
-  assignment        DailyAssignment    @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  assignment        DailyAssignment    @relation(fields: [assignmentId, groupId, userId], references: [id, groupId, userId], onDelete: Cascade)
   user              Profile            @relation(fields: [userId], references: [id], onDelete: Cascade)
   group             Group              @relation(fields: [groupId], references: [id], onDelete: Cascade)
   prompt            Prompt?            @relation(fields: [promptId], references: [id], onDelete: SetNull)
@@ -351,22 +487,24 @@ model Clip {
   views             View[]
   mediaUploadGrants MediaUploadGrant[]
 
-  @@index([assignmentId])
-  @@index([userId])
-  @@index([groupId])
+  @@index([assignmentId, transcodeStatus, recordedAt])
+  @@index([userId, transcodeStatus, recordedAt])
+  @@index([groupId, transcodeStatus, recordedAt])
+  @@index([transcodeStatus, recordedAt])
+  @@index([storageTier, transcodeStatus, recordedAt])
   @@index([promptId])
   @@map("clips")
 }
 
 model BoostPurchase {
-  id            String   @id @default(uuid())
-  userId        String
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId        String   @db.Uuid
   transactionId String   @unique
   productId     String
   store         String?
   isSandbox     Boolean  @default(false)
-  purchasedAt   DateTime
-  createdAt     DateTime @default(now())
+  purchasedAt   DateTime @db.Timestamptz(3)
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
 
   user Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -375,172 +513,181 @@ model BoostPurchase {
 }
 
 model TranscoderWebhookEvent {
-  id          String    @id
+  id          String          @id @db.Uuid
   jobId       String
-  event       String
-  receivedAt  DateTime  @default(now())
-  processedAt DateTime?
+  event       TranscoderEvent
+  receivedAt  DateTime        @default(now()) @db.Timestamptz(3)
+  processedAt DateTime?       @db.Timestamptz(3)
 
   @@unique([jobId, event])
-  @@index([jobId])
   @@map("transcoder_webhook_events")
 }
 
 model MediaUploadGrant {
-  id          String    @id @default(uuid())
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   path        String    @unique
-  userId      String
-  clipId      String
-  mediaType   String
+  userId      String    @db.Uuid
+  clipId      String    @db.Uuid
+  mediaType   MediaType
   contentType String
   maxBytes    Int
-  expiresAt   DateTime
-  consumedAt  DateTime?
-  createdAt   DateTime  @default(now())
+  expiresAt   DateTime  @db.Timestamptz(3)
+  consumedAt  DateTime? @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
 
   user Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
   clip Clip    @relation(fields: [clipId], references: [id], onDelete: Cascade)
 
-  @@index([userId, clipId])
+  @@index([clipId])
+  @@index([userId, consumedAt, expiresAt])
   @@map("media_upload_grants")
 }
 
 model PhotoResponse {
-  id                  String    @id @default(uuid())
-  clipId              String
-  userId              String
+  id                  String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clipId              String          @db.Uuid
+  userId              String          @db.Uuid
   imageUrl            String
   hlsUrl              String?
   thumbnailUrl        String?
   thumbnailBlurUrl    String?
-  transcodeStatus     String    @default("COMPLETED")
-  transcodeAttempts   Int       @default(0)
-  transcodeJobId      String?   @unique
-  transcodeDispatchAt DateTime?
-  mediaType           String    @default("photo") // Determines if it's a photo or a snippet video
-  createdAt           DateTime  @default(now())
+  transcodeStatus     TranscodeStatus @default(COMPLETED)
+  transcodeAttempts   Int             @default(0)
+  transcodeJobId      String?         @unique
+  transcodeDispatchAt DateTime?       @db.Timestamptz(3)
+  mediaType           MediaType       @default(photo) // Determines if it's a photo or a snippet video
+  createdAt           DateTime        @default(now()) @db.Timestamptz(3)
 
   clip Clip    @relation(fields: [clipId], references: [id], onDelete: Cascade)
   user Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([clipId, userId])
-  @@index([clipId])
   @@index([userId])
+  @@index([clipId, createdAt])
   @@map("photo_responses")
 }
 
 model Reaction {
-  id        String   @id @default(uuid())
-  clipId    String
-  userId    String
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clipId    String   @db.Uuid
+  userId    String   @db.Uuid
   emoji     String
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   clip Clip    @relation(fields: [clipId], references: [id], onDelete: Cascade)
   user Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([clipId, userId, emoji])
-  @@index([clipId])
   @@index([userId])
   @@map("reactions")
 }
 
 model Comment {
-  id        String   @id @default(uuid())
-  clipId    String
-  userId    String
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clipId    String   @db.Uuid
+  userId    String   @db.Uuid
   text      String
-  parentId  String?
-  createdAt DateTime @default(now())
+  parentId  String?  @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   clip    Clip      @relation(fields: [clipId], references: [id], onDelete: Cascade)
   user    Profile   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  parent  Comment?  @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  parent  Comment?  @relation("CommentReplies", fields: [parentId, clipId], references: [id, clipId], onDelete: Cascade)
   replies Comment[] @relation("CommentReplies")
 
-  @@index([clipId])
-  @@index([userId])
+  @@unique([id, clipId])
+  @@index([clipId, createdAt])
+  @@index([userId, createdAt])
   @@index([parentId])
   @@map("comments")
 }
 
 model View {
-  id        String   @id @default(uuid())
-  clipId    String
-  userId    String
-  createdAt DateTime @default(now())
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clipId    String   @db.Uuid
+  userId    String   @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   clip Clip    @relation(fields: [clipId], references: [id], onDelete: Cascade)
   user Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([clipId, userId])
-  @@index([clipId])
-  @@index([userId])
+  @@index([userId, createdAt])
   @@map("views")
 }
 
 model PushSubscription {
-  id        String   @id @default(uuid())
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   token     String   @unique
-  userId    String?
-  user      Profile? @relation(fields: [userId], references: [id], onDelete: Cascade)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  userId    String   @db.Uuid
+  user      Profile  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz(3)
+
+  @@index([userId])
 }
 
 model UnlockedAchievement {
-  id            String   @id @default(uuid())
-  userId        String
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId        String   @db.Uuid
   achievementId String
-  groupId       String   @default("global")
-  unlockedAt    DateTime @default(now())
+  groupId       String?  @db.Uuid
+  unlockedAt    DateTime @default(now()) @db.Timestamptz(3)
 
-  user Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user  Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
+  group Group?  @relation(fields: [groupId], references: [id], onDelete: Cascade)
 
-  @@unique([userId, achievementId, groupId])
   @@index([userId])
+  @@index([groupId])
   @@map("unlocked_achievements")
 }
 
 model BetaApplication {
-  id        String   @id @default(uuid())
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   email     String   @unique
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@map("beta_applications")
 }
 
 model ActiveUpload {
-  id             String   @id @default(uuid())
-  uploadId       String   @unique
-  key            String   @unique
-  groupId        String
-  assignmentId   String
-  userId         String
-  clipId         String   @unique
-  mediaType      String   @default("vlog")
+  id             String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  uploadId       String             @unique
+  key            String             @unique
+  groupId        String             @db.Uuid
+  assignmentId   String             @db.Uuid
+  userId         String             @db.Uuid
+  clipId         String             @unique @db.Uuid
+  mediaType      MediaType          @default(vlog)
   contentType    String
   expectedChunks Int
   expectedBytes  BigInt
-  status         String   @default("INITIATED")
-  expiresAt      DateTime
+  status         ActiveUploadStatus @default(INITIATED)
+  expiresAt      DateTime           @db.Timestamptz(3)
   location       String?
   caption        String?
-  metadata       String?  @db.Text
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  metadata       String?            @db.Text
+  metadataJson   Json?              @map("metadata_json")
+  createdAt      DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime           @default(now()) @updatedAt @db.Timestamptz(3)
 
-  user  Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
-  group Group   @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user       Profile         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  group      Group           @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  assignment DailyAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
 
+  @@index([userId])
+  @@index([groupId])
+  @@index([assignmentId, status])
+  @@index([status, expiresAt])
+  @@index([status, updatedAt])
   @@map("active_uploads")
 }
 
 model RateLimitBucket {
   key       String   @id
   count     Int
-  resetAt   DateTime
-  updatedAt DateTime @updatedAt
+  resetAt   DateTime @db.Timestamptz(3)
+  updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz(3)
 
   @@index([resetAt])
   @@map("rate_limit_buckets")

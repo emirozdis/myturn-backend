@@ -8,6 +8,10 @@ export type RequestLogContext = {
   groupId?: string;
   clipId?: string;
   jobRunId?: string;
+  clientRequestId?: string;
+  operationId?: string;
+  appSessionId?: string;
+  authState?: string;
 };
 
 const requestContext = new AsyncLocalStorage<RequestLogContext>();
@@ -24,4 +28,3 @@ export function setLogContext(fields: Partial<Omit<RequestLogContext, "requestId
   const context = requestContext.getStore();
   if (context) Object.assign(context, fields);
 }
-

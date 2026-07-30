@@ -58,7 +58,7 @@ async function POSTHandler(req: NextRequest) {
   }
 
   const profile = await db.profile.findUnique({
-    where: { id: uid },
+    where: { firebaseUid: uid },
     select: {
       id: true,
       email: true,

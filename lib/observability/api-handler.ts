@@ -162,11 +162,20 @@ export function withApiHandler<Context = unknown>(
     const requestId = idFactory();
     const route = normalizedRoute(request.nextUrl.pathname);
     const startedAt = performance.now();
+    const headerValue = (name: string, maxLength = 200) => request.headers.get(name)?.slice(0, maxLength) || undefined;
 
     return runWithRequestContext(
-      { requestId, method: request.method, route },
+      {
+        requestId,
+        method: request.method,
+        route,
+        clientRequestId: headerValue("x-client-request-id"),
+        operationId: headerValue("x-client-operation-id"),
+        appSessionId: headerValue("x-client-app-session-id"),
+      },
       async () => {
         let response: Response;
+        let incidentPersisted = false;
 
         try {
           response = await handler(request, context);
@@ -190,6 +199,7 @@ export function withApiHandler<Context = unknown>(
             );
             try {
               await incidentWriter(incident);
+              incidentPersisted = true;
             } catch (persistenceError: unknown) {
               requestLogger.error(
                 {
@@ -240,6 +250,7 @@ export function withApiHandler<Context = unknown>(
                 error,
                 context: details,
               });
+              incidentPersisted = true;
             } catch (persistenceError: unknown) {
               requestLogger.error(
                 {
@@ -255,6 +266,56 @@ export function withApiHandler<Context = unknown>(
         }
 
         response = await normalizeResponse(response);
+
+        if (!response.ok && !incidentPersisted) {
+          const logId = idFactory();
+          const status = response.status;
+          let responseBody: Record<string, unknown> | undefined;
+          try {
+            const parsed = await response.clone().json();
+            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+              responseBody = parsed as Record<string, unknown>;
+            }
+          } catch {
+            // The status and route still provide a useful incident for non-JSON responses.
+          }
+          const responseError = typeof responseBody?.error === "string"
+            ? responseBody.error
+            : typeof responseBody?.message === "string"
+              ? responseBody.message
+              : undefined;
+          const code = typeof responseBody?.code === "string"
+            ? responseBody.code.slice(0, 100)
+            : codeForResponse(status, responseError);
+          requestLogger.warn(
+            {
+              event: "api.non_2xx_response",
+              logId,
+              status,
+              code,
+            },
+            "API request completed with a non-2xx response",
+          );
+          try {
+            await incidentWriter({
+              id: logId,
+              level: status >= 500 ? "error" : "warn",
+              event: "api.non_2xx_response",
+              code,
+              status,
+              error: responseError ? new Error(responseError) : undefined,
+            });
+          } catch (persistenceError: unknown) {
+            requestLogger.error(
+              {
+                event: "incident.persistence_failed",
+                logId,
+                err: serializeUnknownError(persistenceError),
+              },
+              "Incident persistence failed; stdout remains the fallback",
+            );
+          }
+        }
 
         const durationMs = Math.round((performance.now() - startedAt) * 100) / 100;
         requestLogger.info(

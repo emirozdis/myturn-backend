@@ -3,6 +3,7 @@ import type { DecodedIdToken } from "firebase-admin/auth";
 import { getFirebaseAuth } from "@/lib/firebase-admin";
 import { prisma } from "@/lib/prisma";
 import { identityMatchesProfile } from "@/lib/auth-policy";
+import { setLogContext } from "@/lib/observability/request-context";
 
 export interface SessionUser {
   id: string;
@@ -35,18 +36,46 @@ export async function getAuthSession(): Promise<Session | null> {
   try {
     const reqHeaders = await headers();
     const authHeader = reqHeaders.get("authorization");
-    if (!authHeader?.startsWith("Bearer ")) return null;
+    if (!authHeader?.startsWith("Bearer ")) {
+      setLogContext({ authState: "anonymous" });
+      return null;
+    }
 
     const token = authHeader.substring(7).trim();
-    if (!token) return null;
+    if (!token) {
+      setLogContext({ authState: "missing_token" });
+      return null;
+    }
 
-    const decodedToken = await verifyFirebaseIdToken(token, true);
-    if (!decodedToken?.uid) return null;
+    let decodedToken: DecodedIdToken;
+    try {
+      decodedToken = await getFirebaseAuth().verifyIdToken(token, true);
+    } catch (error) {
+      const code = error && typeof error === "object" && "code" in error
+        ? String((error as { code?: unknown }).code)
+        : "";
+      const authState = code.includes("id-token-expired")
+        ? "expired"
+        : code.includes("id-token-revoked")
+          ? "revoked"
+          : code.includes("user-disabled")
+            ? "disabled"
+            : "invalid";
+      setLogContext({ authState });
+      return null;
+    }
+    if (!decodedToken?.uid) {
+      setLogContext({ authState: "invalid" });
+      return null;
+    }
 
     const profile = await prisma.profile.findUnique({
-      where: { id: decodedToken.uid },
+      where: { firebaseUid: decodedToken.uid },
     });
-    if (!profile) return null;
+    if (!profile) {
+      setLogContext({ authState: "missing_profile" });
+      return null;
+    }
     if (!identityMatchesProfile(
       {
         uid: decodedToken.uid,
@@ -54,7 +83,12 @@ export async function getAuthSession(): Promise<Session | null> {
         emailVerified: decodedToken.email_verified === true,
       },
       profile,
-    )) return null;
+    )) {
+      setLogContext({ authState: "identity_mismatch" });
+      return null;
+    }
+
+    setLogContext({ userId: profile.id, authState: "valid" });
 
     return {
       user: {
@@ -70,6 +104,7 @@ export async function getAuthSession(): Promise<Session | null> {
       },
     };
   } catch {
+    setLogContext({ authState: "invalid" });
     return null;
   }
 }
