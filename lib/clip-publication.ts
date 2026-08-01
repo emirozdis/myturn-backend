@@ -28,7 +28,10 @@ export async function publishReadyClipsInOrder(
   // Completion webhooks for this queue may arrive concurrently. The
   // transaction-scoped lock prevents both callbacks from observing an
   // incomplete view and leaving a ready clip stranded.
-  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`${userId}:${groupId}`}, 0))`;
+  // PostgreSQL returns `void` from pg_advisory_xact_lock. Prisma cannot
+  // deserialize that type, so cast it to a supported scalar after the lock is
+  // acquired. Without the cast, the entire webhook transaction rolls back.
+  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`${userId}:${groupId}`}, 0))::text AS lock_result`;
 
   const clips = await tx.clip.findMany({
     where: {
