@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { sendPushToUser } from "@/lib/push-server";
 import { reportError } from "@/lib/observability/logger";
 import { getBusinessClock, getBusinessDate } from "@/lib/business-time";
+import { getRaincheckUserId } from "@/lib/raincheck";
 
 // A daily turn only has product value when there is someone else in the
 // group to share it with. Keep this rule in the assignment domain layer so
@@ -203,14 +204,11 @@ export async function rollGroupAssignmentForDate(groupId: string, localDate: Dat
     where: { groupId, date: yesterdayDate },
   });
 
-  // Evaluate Raincheck locking constraints
-  let forceUserId: string | null = null;
-  if (yesterdayAssignment?.isPassed && yesterdayAssignment.passedByUserId) {
-    const isStillMember = group.members.some(m => m.userId === yesterdayAssignment.passedByUserId);
-    if (isStillMember) {
-      forceUserId = yesterdayAssignment.passedByUserId;
-    }
-  }
+  // A claim changes isPassed back to false but intentionally retains
+  // passedByUserId. Keep the original passer's one-day raincheck even when
+  // another member claims or completes the released assignment.
+  const currentMemberIds = new Set(group.members.map((member) => member.userId));
+  const forceUserId = getRaincheckUserId(yesterdayAssignment, currentMemberIds);
 
   const recentAssignments = await db.dailyAssignment.findMany({
     where: { groupId, date: { lt: localDate } },
@@ -218,7 +216,6 @@ export async function rollGroupAssignmentForDate(groupId: string, localDate: Dat
     take: group.members.length * 2,
   });
 
-  const currentMemberIds = new Set(group.members.map((m) => m.userId));
   const seenInCycle = new Set<string>();
 
   for (const asg of recentAssignments) {
