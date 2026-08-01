@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import { sendPushToUser } from "@/lib/push-server";
 import { r2 } from "@/lib/r2";
 import { AppError } from "@/lib/observability/errors";
+import { publishReadyClipsInOrder } from "@/lib/clip-publication";
 
 function cleanVirtualKey(key: unknown): string | null {
   if (typeof key !== "string" || !key || key.startsWith("/") || key.includes("..")) return null;
@@ -137,36 +138,31 @@ async function POSTHandler(req: NextRequest) {
     }
   }
 
-  const applied = await db.$transaction(async (tx) => {
+  const publishedClipIds = await db.$transaction(async (tx) => {
     const claim = await tx.transcoderWebhookEvent.updateMany({
       where: { id: eventId, processedAt: null },
       data: { processedAt: new Date() },
     });
-    if (claim.count !== 1) return false;
+    if (claim.count !== 1) return null;
 
     if (event === "Saved" && clip) {
-      await tx.clip.update({
-        where: { id: clip.id },
-        data: { transcodeStatus: "COMPLETED", hlsUrl, thumbnailUrl: thumbnailUrl!, thumbnailBlurUrl },
+      await tx.clip.updateMany({
+        where: { id: clip.id, transcodeStatus: { not: "COMPLETED" } },
+        data: { transcodeReadyAt: new Date(), hlsUrl, thumbnailUrl: thumbnailUrl!, thumbnailBlurUrl },
       });
-      await tx.activeUpload.updateMany({
-        where: {
-          clipId: clip.id,
-          status: { in: ["COMPLETING", "ASSEMBLED", "FINALIZED"] },
-        },
-        data: { status: "PUBLISHED" },
-      });
+      return publishReadyClipsInOrder(tx, clip.userId, clip.groupId);
     } else if (event === "Saved" && photoResponse) {
       await tx.photoResponse.update({
         where: { id: photoResponse.id },
         data: { transcodeStatus: "COMPLETED", hlsUrl, thumbnailUrl, thumbnailBlurUrl },
       });
-    } else if (clip && clip.transcodeStatus !== "COMPLETED") {
+    } else if (clip && clip.transcodeStatus !== "COMPLETED" && !clip.transcodeReadyAt) {
       const attempts = clip.transcodeAttempts + 1;
       await tx.clip.update({
         where: { id: clip.id },
         data: { transcodeStatus: attempts >= 3 ? "FAILED_PERMANENTLY" : "FAILED", transcodeAttempts: attempts },
       });
+      if (attempts >= 3) return publishReadyClipsInOrder(tx, clip.userId, clip.groupId);
     } else if (photoResponse && (
       photoResponse.transcodeStatus !== "COMPLETED"
       || !photoResponse.thumbnailUrl
@@ -180,21 +176,23 @@ async function POSTHandler(req: NextRequest) {
           : { transcodeStatus: attempts >= 3 ? "FAILED_PERMANENTLY" : "FAILED", transcodeAttempts: attempts },
       });
     }
-    return true;
+    return [];
   });
 
-  if (!applied) return NextResponse.json({ success: true, replay: true });
+  if (publishedClipIds === null) return NextResponse.json({ success: true, replay: true });
 
-  if (event === "Saved" && clip && clip.transcodeStatus !== "COMPLETED") {
+  if (clip && publishedClipIds.length) {
     const [poster, group, members] = await Promise.all([
       db.profile.findUnique({ where: { id: clip.userId }, select: { name: true, handle: true } }),
       db.group.findUnique({ where: { id: clip.groupId }, select: { name: true } }),
       db.groupMember.findMany({ where: { groupId: clip.groupId }, select: { userId: true } }),
     ]);
     const posterName = poster?.name || (poster?.handle ? `@${poster.handle}` : undefined);
-    await Promise.allSettled(members.map((member) => sendPushToUser(member.userId, member.userId === clip.userId
-      ? { category: "posts", key: "ownMomentReady", deepLink: { screen: "today", groupId: clip.groupId, clipId: clip.id } }
-      : { category: "posts", key: "newMomentReady", vars: { actor: posterName, group: group?.name }, deepLink: { screen: "today", groupId: clip.groupId, clipId: clip.id } })));
+    for (const publishedClipId of publishedClipIds) {
+      await Promise.allSettled(members.map((member) => sendPushToUser(member.userId, member.userId === clip.userId
+        ? { category: "posts", key: "ownMomentReady", deepLink: { screen: "today", groupId: clip.groupId, clipId: publishedClipId } }
+        : { category: "posts", key: "newMomentReady", vars: { actor: posterName, group: group?.name }, deepLink: { screen: "today", groupId: clip.groupId, clipId: publishedClipId } })));
+    }
   }
 
   if (event === "Saved" && photoResponse && photoResponse.transcodeStatus !== "COMPLETED") {

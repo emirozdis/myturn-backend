@@ -591,6 +591,7 @@ model Clip {
   transcodeAttempts   Int             @default(0)
   transcodeJobId      String?         @unique
   transcodeDispatchAt DateTime?       @db.Timestamptz(3)
+  transcodeReadyAt    DateTime?       @db.Timestamptz(3)
   mediaType           MediaType       @default(vlog)
 
   storageTier StorageTier @default(HOT)
@@ -616,6 +617,7 @@ model Clip {
   @@index([assignmentId, transcodeStatus, recordedAt])
   @@index([userId, transcodeStatus, recordedAt])
   @@index([groupId, transcodeStatus, recordedAt])
+  @@index([userId, groupId, finalizedAt, recordedAt])
   @@index([transcodeStatus, recordedAt])
   @@index([storageTier, transcodeStatus, recordedAt])
   @@index([promptId])

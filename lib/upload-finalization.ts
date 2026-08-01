@@ -60,7 +60,7 @@ async function inSerializableTransaction<T>(work: (tx: Prisma.TransactionClient)
 
 async function dispatchTranscode(clipId: string) {
   let clip = await db.clip.findUnique({ where: { id: clipId } });
-  if (!clip || clip.mediaType === "photo" || clip.transcodeStatus === "COMPLETED") return;
+  if (!clip || clip.mediaType === "photo" || clip.transcodeStatus === "COMPLETED" || clip.transcodeReadyAt) return;
   if (clip.transcodeJobId && clip.transcodeJobId !== clip.id) return;
   if (clip.transcodeJobId && clip.transcodeStatus === "PROCESSING") return;
 
