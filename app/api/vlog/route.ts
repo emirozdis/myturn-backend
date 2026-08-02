@@ -286,7 +286,11 @@ async function GETHandler(req: NextRequest) {
               },
               comments: {
                 orderBy: { createdAt: "asc" },
-                include: { user: { select: { id: true, name: true, image: true, handle: true } } },
+                include: {
+                  user: { select: { id: true, name: true, image: true, handle: true } },
+                  likes: { where: { userId: session.user.id }, select: { userId: true } },
+                  _count: { select: { likes: true } },
+                },
               },
               views: {
                 include: { user: { select: { id: true, name: true, image: true, handle: true } } },
@@ -560,7 +564,11 @@ async function GETHandler(req: NextRequest) {
           },
           comments: {
             orderBy: { createdAt: "asc" },
-            include: { user: { select: { id: true, name: true, image: true, handle: true } } },
+            include: {
+              user: { select: { id: true, name: true, image: true, handle: true } },
+              likes: { where: { userId: session.user.id }, select: { userId: true } },
+              _count: { select: { likes: true } },
+            },
           },
           views: {
             include: { user: { select: { id: true, name: true, image: true, handle: true } } },
@@ -1233,6 +1241,64 @@ async function POSTHandler(req: NextRequest) {
       return NextResponse.json({ success: true, reaction, newlyUnlocked });
     }
 
+    if (action === "toggleCommentLike") {
+      const { commentId } = args;
+      if (typeof commentId !== "string" || commentId.length < 8 || commentId.length > 128) {
+        return NextResponse.json({ error: "Invalid comment." }, { status: 400 });
+      }
+
+      const likeLimit = await rateLimit(`comment_like_${session.user.id}`, 60, 60000);
+      if (!likeLimit.success) {
+        return NextResponse.json({ error: "Too many likes. Please slow down." }, { status: 429 });
+      }
+
+      const comment = await db.comment.findUnique({
+        where: { id: commentId },
+        select: {
+          id: true,
+          clip: { select: { groupId: true, recordedAt: true } },
+        },
+      });
+      if (!comment) return NextResponse.json({ error: "Comment not found" }, { status: 404 });
+
+      const member = await db.groupMember.findUnique({
+        where: { groupId_userId: { groupId: comment.clip.groupId, userId: session.user.id } },
+      });
+      if (!member) return NextResponse.json({ error: "Bu gruba üye değilsiniz." }, { status: 403 });
+
+      const [isUserPro, group] = await Promise.all([
+        checkUserProStatus(session.user.id),
+        db.group.findUnique({ where: { id: comment.clip.groupId }, include: { boosts: true } }),
+      ]);
+      const isGroupPro = (group?.boosts?.length || 0) >= 3;
+      const isFrozen = group?.isFrozen || false;
+      if (isArchiveLocked(comment.clip.recordedAt, isUserPro, isGroupPro, isFrozen, group?.timezone || "UTC")) {
+        return NextResponse.json({ error: "Arşiv kilitlidir. Eylem gerçekleştirilemez." }, { status: 403 });
+      }
+
+      const existing = await db.commentLike.findUnique({
+        where: { commentId_userId: { commentId, userId: session.user.id } },
+        select: { id: true },
+      });
+
+      let liked = true;
+      if (existing) {
+        await db.commentLike.delete({ where: { id: existing.id } });
+        liked = false;
+      } else {
+        try {
+          await db.commentLike.create({ data: { commentId, userId: session.user.id } });
+        } catch (error: unknown) {
+          if (!(error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002")) {
+            throw error;
+          }
+        }
+      }
+
+      const likeCount = await db.commentLike.count({ where: { commentId } });
+      return NextResponse.json({ success: true, commentId, liked, likeCount });
+    }
+
     if (action === "addComment") {
       const { clipId, text: rawText, parentId: rawParentId } = args;
       const text = typeof rawText === "string" ? rawText.trim() : "";
@@ -1287,7 +1353,11 @@ async function POSTHandler(req: NextRequest) {
       try {
         comment = await db.comment.create({
           data: { clipId, userId: session.user.id, text, parentId: parentId || null },
-          include: { user: { select: { id: true, name: true, image: true, handle: true } } },
+          include: {
+            user: { select: { id: true, name: true, image: true, handle: true } },
+            likes: { where: { userId: session.user.id }, select: { userId: true } },
+            _count: { select: { likes: true } },
+          },
         });
       } catch (dbErr: unknown) {
         if (dbErr instanceof Error && dbErr.message.includes('Unknown arg')) {

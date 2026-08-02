@@ -76,7 +76,11 @@ async function GETHandler(req: NextRequest) {
             },
             comments: {
               orderBy: { createdAt: "asc" },
-              include: { user: { select: { id: true, name: true, image: true, handle: true } } },
+              include: {
+                user: { select: { id: true, name: true, image: true, handle: true } },
+                likes: { where: { userId: session.user.id }, select: { userId: true } },
+                _count: { select: { likes: true } },
+              },
             },
             reactions: true,
             views: {

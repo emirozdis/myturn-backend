@@ -76,6 +76,10 @@ export async function getAuthSession(): Promise<Session | null> {
       setLogContext({ authState: "missing_profile" });
       return null;
     }
+    if (profile.isSuspended) {
+      setLogContext({ userId: profile.id, authState: "suspended" });
+      return null;
+    }
     if (!identityMatchesProfile(
       {
         uid: decodedToken.uid,

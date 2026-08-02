@@ -77,10 +77,13 @@ async function POSTHandler(req: NextRequest) {
 
   const profile = await db.profile.findUnique({
     where: { id: handoff.userId },
-    select: { id: true, firebaseUid: true, email: true, name: true, image: true },
+    select: { id: true, firebaseUid: true, email: true, name: true, image: true, isSuspended: true },
   });
   if (!profile) {
     return NextResponse.json({ error: "Account not found." }, { status: 404 });
+  }
+  if (profile.isSuspended) {
+    return NextResponse.json({ error: "This account has been suspended." }, { status: 403 });
   }
 
   try {

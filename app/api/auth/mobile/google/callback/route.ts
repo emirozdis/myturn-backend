@@ -59,9 +59,11 @@ async function GETHandler(req: NextRequest) {
       select: { userId: true },
     });
     const existingUser = existingAccount
-      ? await db.profile.findUnique({ where: { id: existingAccount.userId }, select: { id: true } })
-      : await db.profile.findUnique({ where: { email }, select: { id: true } });
+      ? await db.profile.findUnique({ where: { id: existingAccount.userId }, select: { id: true, isSuspended: true } })
+      : await db.profile.findUnique({ where: { email }, select: { id: true, isSuspended: true } });
     const isNewUser = !existingUser;
+
+    if (existingUser?.isSuspended) return redirectError("account_suspended");
 
     if (isNewUser && process.env.NEXT_PUBLIC_ALLOW_REGISTRATION === "false") {
       return redirectError("registration_disabled");

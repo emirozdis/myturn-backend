@@ -10,8 +10,7 @@ import { getRaincheckUserId } from "@/lib/raincheck";
 // group to share it with. Keep this rule in the assignment domain layer so
 // cron jobs, API reads, and membership events cannot disagree about it.
 export const MIN_MEMBERS_FOR_DAILY_ASSIGNMENT = 2;
-export const AUTO_PASS_LOCAL_MINUTE = 12 * 60 + 30;
-export const AUTO_PASS_MIN_ASSIGNMENT_AGE_MS = 3.5 * 60 * 60 * 1000;
+export const AUTO_PASS_LOCAL_MINUTE = 13 * 60 + 30;
 
 export function isAutomaticPassDue(
   assignmentCreatedAt: Date | string,
@@ -20,8 +19,8 @@ export function isAutomaticPassDue(
 ): boolean {
   const createdAt = new Date(assignmentCreatedAt).getTime();
   return Number.isFinite(createdAt)
-    && currentLocalMinute >= AUTO_PASS_LOCAL_MINUTE
-    && now.getTime() - createdAt >= AUTO_PASS_MIN_ASSIGNMENT_AGE_MS;
+    && now.getTime() >= createdAt
+    && currentLocalMinute >= AUTO_PASS_LOCAL_MINUTE;
 }
 
 export function getVlogCircadianState(timezone: string) {

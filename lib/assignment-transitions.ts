@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
-import { getVlogCircadianState } from "@/lib/vlog-helpers";
+import { AUTO_PASS_LOCAL_MINUTE, getVlogCircadianState } from "@/lib/vlog-helpers";
 
 async function serializable<T>(work: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
   for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -20,7 +20,10 @@ export async function passCurrentAssignment(assignmentId: string, actorUserId: s
       include: { group: { include: { members: true } } },
     });
     if (!assignment || assignment.userId !== actorUserId || assignment.group.isFrozen) return null;
-    const businessDate = getVlogCircadianState(assignment.group.timezone).businessDate;
+    const circadian = getVlogCircadianState(assignment.group.timezone);
+    const businessDate = circadian.businessDate;
+    const currentLocalMinute = circadian.currentHour * 60 + circadian.currentMinute;
+    if (!automatic && currentLocalMinute >= AUTO_PASS_LOCAL_MINUTE) return null;
     const activeUploads = await tx.activeUpload.count({
       where: { assignmentId, status: { in: ["INITIATED", "COMPLETING", "ASSEMBLED"] } },
     });
@@ -39,7 +42,7 @@ export async function passCurrentAssignment(assignmentId: string, actorUserId: s
       },
       data: {
         isPassed: true,
-        passedByUserId: assignment.isMandatory ? null : actorUserId,
+        passedByUserId: automatic || assignment.isMandatory ? null : actorUserId,
       },
     });
     if (changed.count !== 1) return null;

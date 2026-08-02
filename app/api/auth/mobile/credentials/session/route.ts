@@ -64,6 +64,7 @@ async function POSTHandler(req: NextRequest) {
       email: true,
       name: true,
       image: true,
+      isSuspended: true,
     },
   });
 
@@ -71,6 +72,12 @@ async function POSTHandler(req: NextRequest) {
     return NextResponse.json(
       { error: "Account is not provisioned." },
       { status: 403 }
+    );
+  }
+  if (profile.isSuspended) {
+    return NextResponse.json(
+      { error: "This account has been suspended." },
+      { status: 403 },
     );
   }
 

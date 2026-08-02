@@ -132,7 +132,10 @@ model Profile {
   handle   String? @unique
   location String? @default("Phuket, Thailand")
 
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  isSuspended      Boolean   @default(false)
+  suspendedAt      DateTime? @db.Timestamptz(3)
+  suspensionReason String?   @db.Text
+  createdAt        DateTime  @default(now()) @db.Timestamptz(3)
 
   accounts Account[]
 
@@ -144,6 +147,7 @@ model Profile {
   photoResponses       PhotoResponse[]
   pushSubscriptions    PushSubscription[]
   comments             Comment[]
+  commentLikes         CommentLike[]
   views                View[]
   unlockedAchievements UnlockedAchievement[]
   pokes                Poke[]
@@ -718,16 +722,31 @@ model Comment {
   parentId  String?  @db.Uuid
   createdAt DateTime @default(now()) @db.Timestamptz(3)
 
-  clip    Clip      @relation(fields: [clipId], references: [id], onDelete: Cascade)
-  user    Profile   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  parent  Comment?  @relation("CommentReplies", fields: [parentId, clipId], references: [id, clipId], onDelete: Cascade)
-  replies Comment[] @relation("CommentReplies")
+  clip    Clip          @relation(fields: [clipId], references: [id], onDelete: Cascade)
+  user    Profile       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parent  Comment?      @relation("CommentReplies", fields: [parentId, clipId], references: [id, clipId], onDelete: Cascade)
+  replies Comment[]     @relation("CommentReplies")
+  likes   CommentLike[]
 
   @@unique([id, clipId])
   @@index([clipId, createdAt])
   @@index([userId, createdAt])
   @@index([parentId])
   @@map("comments")
+}
+
+model CommentLike {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  commentId String   @db.Uuid
+  userId    String   @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  comment Comment @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  user    Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([commentId, userId])
+  @@index([userId, createdAt])
+  @@map("comment_likes")
 }
 
 model View {
@@ -819,4 +838,20 @@ model RateLimitBucket {
 
   @@index([resetAt])
   @@map("rate_limit_buckets")
+}
+
+model AdminAuditLog {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  actorEmail String
+  action     String
+  targetType String?
+  targetId   String?
+  details    Json?
+  ipAddress  String?
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([createdAt])
+  @@index([action, createdAt])
+  @@index([targetType, targetId, createdAt])
+  @@map("admin_audit_logs")
 }
