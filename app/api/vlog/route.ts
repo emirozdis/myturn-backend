@@ -359,13 +359,14 @@ async function GETHandler(req: NextRequest) {
               : generateEdgeUrl("vlogs", finalHls, 3600, clip.storageTier);
           }
 
-          // videoUrl is retained in the database as the private transcoder
-          // source. Never expose it for video playback; legacy clients receive
-          // the same HLS URL in both playback fields.
-          clip.videoUrl = publicClipPlaybackUrl(
-            clip,
-            clip.transcodeStatus === "COMPLETED" ? clip.hlsUrl : null,
-          );
+          // Legacy clients receive the durable media URL in videoUrl even
+          // though that compatibility field is not stored in the database.
+          Object.assign(clip, {
+            videoUrl: publicClipPlaybackUrl(
+              clip,
+              clip.transcodeStatus === "COMPLETED" ? clip.hlsUrl : null,
+            ),
+          });
 
           clip.thumbnailUrl = clip.thumbnailUrl.startsWith("http") || clip.thumbnailUrl.startsWith("/") 
             ? clip.thumbnailUrl 
@@ -613,10 +614,12 @@ async function GETHandler(req: NextRequest) {
           : generateEdgeUrl("vlogs", finalHls, 3600, clip.storageTier);
       }
 
-      clip.videoUrl = publicClipPlaybackUrl(
-        clip,
-        clip.transcodeStatus === "COMPLETED" ? clip.hlsUrl : null,
-      );
+      Object.assign(clip, {
+        videoUrl: publicClipPlaybackUrl(
+          clip,
+          clip.transcodeStatus === "COMPLETED" ? clip.hlsUrl : null,
+        ),
+      });
 
       clip.thumbnailUrl = clip.thumbnailUrl.startsWith("http") || clip.thumbnailUrl.startsWith("/") 
         ? clip.thumbnailUrl 
@@ -1618,7 +1621,7 @@ async function deleteResponseStorageAssets(response: {
 }
 
 async function deleteClipStorageAssets(clip: {
-  videoUrl?: string | null;
+  imageUrl?: string | null;
   thumbnailUrl?: string | null;
   thumbnailBlurUrl?: string | null;
   hlsUrl?: string | null;
@@ -1631,7 +1634,7 @@ async function deleteClipStorageAssets(clip: {
 }) {
   const assetKeys = new Set<string>();
 
-  if (clip.videoUrl) assetKeys.add(clip.videoUrl);
+  if (clip.imageUrl) assetKeys.add(clip.imageUrl);
   if (clip.thumbnailUrl) assetKeys.add(clip.thumbnailUrl);
   if (clip.thumbnailBlurUrl && clip.thumbnailBlurUrl !== clip.thumbnailUrl) {
     assetKeys.add(clip.thumbnailBlurUrl);

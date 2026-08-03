@@ -2,7 +2,7 @@ import { generateEdgeUrl } from "@/lib/media-signing";
 
 type DeliverableClip = {
   mediaType: string;
-  videoUrl: string;
+  imageUrl: string | null;
   storageTier: string;
 };
 
@@ -12,9 +12,10 @@ type DeliverableClip = {
  */
 export function publicClipPlaybackUrl(clip: DeliverableClip, hlsUrl: string | null): string {
   if (clip.mediaType !== "photo") return hlsUrl || "";
-  return clip.videoUrl.startsWith("http") || clip.videoUrl.startsWith("/")
-    ? clip.videoUrl
-    : generateEdgeUrl("vlogs", clip.videoUrl, 3600, clip.storageTier);
+  if (!clip.imageUrl) return "";
+  return clip.imageUrl.startsWith("http") || clip.imageUrl.startsWith("/")
+    ? clip.imageUrl
+    : generateEdgeUrl("vlogs", clip.imageUrl, 3600, clip.storageTier);
 }
 
 /** Photo responses are image-only; legacy snippet responses stay private. */

@@ -587,7 +587,7 @@ model Clip {
   assignmentId        String          @db.Uuid
   userId              String          @db.Uuid
   groupId             String          @db.Uuid
-  videoUrl            String
+  imageUrl            String?
   thumbnailUrl        String
   thumbnailBlurUrl    String?
   hlsUrl              String?

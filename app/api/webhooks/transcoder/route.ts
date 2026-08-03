@@ -7,6 +7,7 @@ import { sendPushToUser } from "@/lib/push-server";
 import { r2 } from "@/lib/r2";
 import { AppError } from "@/lib/observability/errors";
 import { publishReadyClipsInOrder } from "@/lib/clip-publication";
+import { logicalUploadKey } from "@/lib/upload-source";
 
 function cleanVirtualKey(key: unknown): string | null {
   if (typeof key !== "string" || !key || key.startsWith("/") || key.includes("..")) return null;
@@ -104,10 +105,13 @@ async function POSTHandler(req: NextRequest) {
     return NextResponse.json({ error: "Unknown transcoder job." }, { status: 404 });
   }
 
-  const sourceUrl = clip?.videoUrl || photoResponse!.imageUrl;
+  const activeUpload = clip
+    ? await db.activeUpload.findUnique({ where: { clipId: clip.id }, select: { id: true, key: true } })
+    : null;
   const entityId = clip?.id || photoResponse!.id;
-  const hlsDir = sourceUrl.substring(0, sourceUrl.lastIndexOf("/"));
-  const expectedHls = hlsDir ? `${hlsDir}/${entityId}_hls/master.m3u8` : `${entityId}_hls/master.m3u8`;
+  const sourceUrl = activeUpload ? logicalUploadKey(activeUpload.key) : photoResponse?.imageUrl || null;
+  const hlsDir = sourceUrl?.includes("/") ? sourceUrl.substring(0, sourceUrl.lastIndexOf("/")) : "";
+  const expectedHls = clip?.hlsUrl || (hlsDir ? `${hlsDir}/${entityId}_hls/master.m3u8` : `${entityId}_hls/master.m3u8`);
   const responseSourceBase = photoResponse?.imageUrl.replace(/\.[^/.]+$/, "");
   const expectedResponseThumbnail = responseSourceBase ? `${responseSourceBase}-thumb.jpg` : null;
   const expectedResponseBlur = responseSourceBase ? `${responseSourceBase}-thumb-blur.jpg` : null;
@@ -138,6 +142,13 @@ async function POSTHandler(req: NextRequest) {
     }
   }
 
+  const terminalClipFailure = Boolean(event === "Error" && clip && clip.transcodeAttempts + 1 >= 3);
+  // Delete a terminal source before its ActiveUpload pointer. If storage
+  // deletion fails, this unprocessed webhook can safely retry the exact key.
+  if (activeUpload && (event === "Saved" || terminalClipFailure)) {
+    await r2.deleteObjects("vlogs", [logicalUploadKey(activeUpload.key)]);
+  }
+
   const publishedClipIds = await db.$transaction(async (tx) => {
     const claim = await tx.transcoderWebhookEvent.updateMany({
       where: { id: eventId, processedAt: null },
@@ -150,6 +161,7 @@ async function POSTHandler(req: NextRequest) {
         where: { id: clip.id, transcodeStatus: { not: "COMPLETED" } },
         data: { transcodeReadyAt: new Date(), hlsUrl, thumbnailUrl: thumbnailUrl!, thumbnailBlurUrl },
       });
+      await tx.activeUpload.deleteMany({ where: { clipId: clip.id } });
       return publishReadyClipsInOrder(tx, clip.userId, clip.groupId);
     } else if (event === "Saved" && photoResponse) {
       await tx.photoResponse.update({
@@ -162,7 +174,10 @@ async function POSTHandler(req: NextRequest) {
         where: { id: clip.id },
         data: { transcodeStatus: attempts >= 3 ? "FAILED_PERMANENTLY" : "FAILED", transcodeAttempts: attempts },
       });
-      if (attempts >= 3) return publishReadyClipsInOrder(tx, clip.userId, clip.groupId);
+      if (attempts >= 3) {
+        await tx.activeUpload.deleteMany({ where: { clipId: clip.id } });
+        return publishReadyClipsInOrder(tx, clip.userId, clip.groupId);
+      }
     } else if (photoResponse && (
       photoResponse.transcodeStatus !== "COMPLETED"
       || !photoResponse.thumbnailUrl

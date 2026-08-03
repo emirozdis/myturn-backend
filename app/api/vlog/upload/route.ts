@@ -349,7 +349,7 @@ async function POSTHandler(req: NextRequest) {
             assignmentId: upload.assignmentId,
             userId: upload.userId,
             groupId: upload.groupId,
-            videoUrl: dbVideoUrl,
+            imageUrl: isPhoto ? dbVideoUrl : null,
             thumbnailUrl: isPhoto ? dbVideoUrl : dbVideoUrl.replace("-media.mp4", "-thumb.jpg"),
             thumbnailBlurUrl: isPhoto ? dbVideoUrl : dbVideoUrl.replace("-media.mp4", "-thumb-blur.jpg"),
             location: upload.location,
@@ -374,17 +374,21 @@ async function POSTHandler(req: NextRequest) {
       }
       const refreshed = await db.clip.findUnique({ where: { id: clip.id } });
       const uploadStatus = refreshed?.transcodeStatus === "COMPLETED" ? "PUBLISHED" : "FINALIZED";
-      await db.activeUpload.updateMany({
-        where: {
-          id: upload.id,
-          status: { in: ["COMPLETING", "ASSEMBLED", "FINALIZED"] },
-        },
-        data: { status: uploadStatus },
-      });
+      if (refreshed?.mediaType === "photo" && refreshed.transcodeStatus === "COMPLETED") {
+        await db.activeUpload.deleteMany({ where: { id: upload.id } });
+      } else {
+        await db.activeUpload.updateMany({
+          where: {
+            id: upload.id,
+            status: { in: ["COMPLETING", "ASSEMBLED", "FINALIZED"] },
+          },
+          data: { status: uploadStatus },
+        });
+      }
       const publicClip = refreshed
         ? {
             ...refreshed,
-            videoUrl: refreshed.mediaType === "photo" ? refreshed.videoUrl : (refreshed.hlsUrl || ""),
+            videoUrl: refreshed.mediaType === "photo" ? (refreshed.imageUrl || "") : (refreshed.hlsUrl || ""),
           }
         : null;
       return NextResponse.json({ success: true, clip: publicClip, transcodeStatus: refreshed?.transcodeStatus, conclude });

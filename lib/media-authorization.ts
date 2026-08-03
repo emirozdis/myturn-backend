@@ -56,7 +56,7 @@ export async function authorizeMediaRead(userId: string, bucket: string, rawPath
   const clip = await db.clip.findFirst({
     where: {
       OR: [
-        { videoUrl: path },
+        { imageUrl: path },
         { thumbnailUrl: path },
         { thumbnailBlurUrl: path },
         { hlsUrl: path },
@@ -88,12 +88,6 @@ export async function authorizeMediaRead(userId: string, bucket: string, rawPath
     },
   });
   if (!clip || clip.group.members.length === 0) return null;
-
-  // The original upload is an internal transcoding source, never a playback
-  // asset. Photos still use videoUrl as their image object for legacy schema
-  // compatibility, but video clips must only be read through HLS playlists and
-  // their child segments.
-  if (path === clip.videoUrl && clip.mediaType !== "photo") return null;
 
   const isUserPro = await checkUserProStatus(userId);
   if (isArchiveLocked(clip.recordedAt, isUserPro, clip.group._count.boosts >= 3, clip.group.isFrozen, clip.group.timezone)) return null;

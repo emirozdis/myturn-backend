@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
+import { logicalUploadKey } from "@/lib/upload-source";
 import { r2 } from "@/lib/r2";
 import { calculateGroupLevel, getVibeArchetype } from "@/lib/vibe";
 import { startTranscodeJob } from "@/lib/transcoder";
@@ -78,9 +79,25 @@ async function dispatchTranscode(clipId: string) {
   });
   if (claimed.count !== 1) return;
 
-  clip = await db.clip.findUnique({ where: { id: clipId } });
+  const [refreshedClip, upload] = await Promise.all([
+    db.clip.findUnique({ where: { id: clipId } }),
+    db.activeUpload.findUnique({ where: { clipId } }),
+  ]);
+  clip = refreshedClip;
   if (!clip) return;
-  const hlsDir = clip.videoUrl.substring(0, clip.videoUrl.lastIndexOf("/"));
+  if (!upload) {
+    const attempts = clip.transcodeAttempts + 1;
+    await db.clip.updateMany({
+      where: { id: clip.id, transcodeStatus: "DISPATCHING" },
+      data: {
+        transcodeStatus: attempts >= 3 ? "FAILED_PERMANENTLY" : "FAILED",
+        transcodeAttempts: attempts,
+      },
+    });
+    throw new Error("Video upload source is missing before transcoding completed.");
+  }
+  const sourceKey = logicalUploadKey(upload.key);
+  const hlsDir = sourceKey.substring(0, sourceKey.lastIndexOf("/"));
   const outputHlsPath = hlsDir ? `${hlsDir}/${clip.id}_hls` : `${clip.id}_hls`;
   let facingMode: "user" | "environment" = "user";
   let composition: RecordingComposition | undefined;
@@ -98,7 +115,7 @@ async function dispatchTranscode(clipId: string) {
   try {
     const transcodeJobId = await startTranscodeJob(
       clip.id,
-      clip.videoUrl,
+      sourceKey,
       outputHlsPath,
       clip.thumbnailUrl || undefined,
       clip.thumbnailBlurUrl || undefined,
@@ -130,7 +147,9 @@ export async function finalizeUploadedClip(
 
     const isPhoto = isPhotoClip(clip);
     if (!clip.finalizedAt) {
-      const object = await r2.head("vlogs", clip.videoUrl);
+      const upload = await db.activeUpload.findUnique({ where: { clipId: clip.id }, select: { key: true } });
+      if (!upload) return { error: "Uploaded media source is missing." };
+      const object = await r2.head("vlogs", logicalUploadKey(upload.key));
       const objectBytes = Number(object.ContentLength || 0);
       const maxBytes = isPhoto ? MAX_PHOTO_BYTES : MAX_VIDEO_BYTES;
       const type = object.ContentType || "";

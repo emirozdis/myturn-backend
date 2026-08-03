@@ -362,7 +362,7 @@ async function GETHandler(req: NextRequest) {
     const isUserPro = await checkUserProStatus(session.user.id);
     logger.debug({ event: "profile.self_loaded", isPro: isUserPro, clipCount: rawClips.length }, "Self profile loaded");
 
-    const clips: Array<(typeof rawClips)[number] & { isLocked: boolean }> = [];
+    const clips: Array<(typeof rawClips)[number] & { videoUrl: string; isLocked: boolean }> = [];
     for (const clip of rawClips) {
       let activeClip = clip;
       const clipGroup = await db.group.findUnique({ where: { id: activeClip.groupId }, include: { boosts: true } });
@@ -676,7 +676,7 @@ async function DELETEHandler(req: NextRequest) {
       },
       select: {
         id: true,
-        videoUrl: true,
+        imageUrl: true,
         thumbnailUrl: true,
         thumbnailBlurUrl: true,
         hlsUrl: true,
@@ -710,7 +710,7 @@ async function DELETEHandler(req: NextRequest) {
       const tiers = storageTiersForClip(clip.storageTier);
       for (const tier of tiers) {
         const keys = keysForTier(tier);
-        addStorageKey(keys, clip.videoUrl);
+        addStorageKey(keys, clip.imageUrl);
         addStorageKey(keys, clip.thumbnailUrl);
         addStorageKey(keys, clip.thumbnailBlurUrl);
         addStorageKey(keys, clip.hlsUrl);

@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import { logicalUploadKey } from "@/lib/upload-source";
 import { r2 } from "@/lib/r2";
 import { execFile } from "child_process";
 import fs from "fs/promises";
@@ -155,6 +156,9 @@ export async function generateMissingThumbnails(
   try {
     const clip = await db.clip.findUnique({ where: { id: clipId } });
     if (!clip) return null;
+    const upload = await db.activeUpload.findUnique({ where: { clipId }, select: { key: true } });
+    if (!upload) return null;
+    const sourceKey = logicalUploadKey(upload.key);
 
     const needsThumb = !clip.thumbnailUrl || clip.thumbnailUrl === "" || clip.thumbnailUrl.includes("fallback");
     const needsBlur = !clip.thumbnailBlurUrl || clip.thumbnailBlurUrl === "";
@@ -168,7 +172,7 @@ export async function generateMissingThumbnails(
 
     let buffer: Buffer;
     try {
-      buffer = await r2.download("vlogs", clip.videoUrl);
+      buffer = await r2.download("vlogs", sourceKey);
     } catch (err: unknown) {
       throw new Error(`Failed to download source video for clip ${clipId}: ${err instanceof Error ? err.message : "Unknown storage error"}`);
     }
@@ -180,7 +184,7 @@ export async function generateMissingThumbnails(
     const inputPath = path.join(workDir, "input.mp4");
     await fs.writeFile(inputPath, buffer);
 
-    const dirName = clip.videoUrl.substring(0, clip.videoUrl.lastIndexOf("/"));
+    const dirName = sourceKey.substring(0, sourceKey.lastIndexOf("/"));
     const fileId = randomUUID();
 
     let currentThumb = clip.thumbnailUrl;

@@ -46,7 +46,7 @@ export async function archiveClip(clipId: string) {
   logInfo("archive.discovery_started", { clipId }, "Discovering clip assets for archival");
   const hlsKeys = await r2.listObjects("vlogs", `${hlsDir}/`);
 
-  const assets = [clip.thumbnailUrl];
+  const assets = [clip.imageUrl, clip.thumbnailUrl].filter(isManagedStorageKey);
   if (clip.thumbnailBlurUrl && clip.thumbnailBlurUrl !== clip.thumbnailUrl) {
     assets.push(clip.thumbnailBlurUrl);
   }
@@ -55,10 +55,6 @@ export async function archiveClip(clipId: string) {
     if (pr.thumbnailUrl) assets.push(pr.thumbnailUrl);
     if (pr.thumbnailBlurUrl && pr.thumbnailBlurUrl !== pr.thumbnailUrl) assets.push(pr.thumbnailBlurUrl);
   }
-  if (!hlsKeys.includes(clip.videoUrl)) {
-    assets.push(clip.videoUrl);
-  }
-
   logInfo(
     "archive.transfer_started",
     { clipId, hlsObjectCount: hlsKeys.length, assetCount: assets.length },
@@ -130,9 +126,9 @@ export async function deleteExpiredClips() {
     const hotKeys = new Set<string>();
     const coldKeys = new Set<string>();
     const directAssets = [
+      clip.imageUrl,
       clip.thumbnailUrl,
       clip.thumbnailBlurUrl,
-      clip.videoUrl,
       ...clip.photoResponses.map((response) => response.imageUrl),
       ...clip.photoResponses.map((response) => response.thumbnailUrl),
       ...clip.photoResponses.map((response) => response.thumbnailBlurUrl),

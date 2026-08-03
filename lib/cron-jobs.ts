@@ -71,7 +71,7 @@ async function runStrandedUploadCleanup(): Promise<CronJobResult> {
     where: {
       OR: [
         { expiresAt: { lt: new Date() }, status: { in: ["INITIATED", "LEGACY_REJECTED"] } },
-        { status: { in: ["FINALIZED", "PUBLISHED"] }, updatedAt: { lt: thresholdTime } },
+        { status: "PUBLISHED", updatedAt: { lt: thresholdTime } },
       ],
     },
     take: 100,
@@ -96,7 +96,9 @@ async function runStrandedUploadCleanup(): Promise<CronJobResult> {
   for (const clip of strandedClips) {
     logInfo("cron.stranded_upload_checked", { clipId: clip.id }, "Checking stranded upload");
     try {
-      await r2.head("vlogs", clip.videoUrl);
+      const upload = await db.activeUpload.findUnique({ where: { clipId: clip.id }, select: { key: true } });
+      if (!upload) throw new Error("Stranded upload has no source object key.");
+      await r2.head("vlogs", upload.key.startsWith("vlogs/") ? upload.key.slice(6) : upload.key);
       logInfo("cron.stranded_upload_recovered", { clipId: clip.id }, "Stranded upload recovered");
       await completeUpload(clip.id, true);
       recoveredClipCount++;

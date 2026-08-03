@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { hlsSafeResponses } from "../../lib/media-delivery";
+import { hlsSafeResponses, publicClipPlaybackUrl } from "../../lib/media-delivery";
 
 test("publishes photo responses and hides all legacy snippet responses", () => {
   const responses = [
@@ -21,4 +21,9 @@ test("publishes photo responses and hides all legacy snippet responses", () => {
 
   assert.deepEqual(delivered.map((response) => response.id), ["photo"]);
   assert.equal(responses[2].imageUrl, "responses/source.mp4");
+});
+
+test("computes the legacy videoUrl response without a stored videoUrl column", () => {
+  assert.equal(publicClipPlaybackUrl({ mediaType: "vlog", imageUrl: null, storageTier: "HOT" }, "signed/master.m3u8"), "signed/master.m3u8");
+  assert.equal(publicClipPlaybackUrl({ mediaType: "photo", imageUrl: "/photos/image.jpg", storageTier: "HOT" }, null), "/photos/image.jpg");
 });

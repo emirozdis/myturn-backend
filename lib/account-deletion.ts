@@ -101,7 +101,7 @@ export async function permanentlyDeleteUserAccount(userId: string) {
     },
     select: {
       id: true,
-      videoUrl: true,
+      imageUrl: true,
       thumbnailUrl: true,
       thumbnailBlurUrl: true,
       hlsUrl: true,
@@ -132,7 +132,7 @@ export async function permanentlyDeleteUserAccount(userId: string) {
   for (const clip of clips) {
     for (const tier of storageTiersForClip(clip.storageTier)) {
       const keys = keysForTier(tier);
-      addStorageKey(keys, clip.videoUrl);
+      addStorageKey(keys, clip.imageUrl);
       addStorageKey(keys, clip.thumbnailUrl);
       addStorageKey(keys, clip.thumbnailBlurUrl);
       addStorageKey(keys, clip.hlsUrl);

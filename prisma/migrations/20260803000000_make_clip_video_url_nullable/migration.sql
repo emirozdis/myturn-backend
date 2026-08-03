@@ -1,0 +1,2 @@
+ALTER TABLE "clips"
+  ALTER COLUMN "videoUrl" DROP NOT NULL;
