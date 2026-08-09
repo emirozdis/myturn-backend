@@ -14,7 +14,7 @@ const defaults = {
   minimumDownloadMbps: 200, minimumUploadMbps: 100, diskGb: 20, offerSearchLimit: 100,
   maxWorkers: 1, jobsPerWorker: 1, queueDepthPerNewWorker: 1, idleTimeoutSeconds: 300,
   idleAction: "DESTROY", startupTimeoutSeconds: 600, healthPollSeconds: 5,
-  maxInstanceFailures: 3, maxMissionAttempts: 3, vastTemplateHash: "",
+  maxInstanceFailures: 3, maxMissionAttempts: 3, missionTimeoutSeconds: 1800, vastTemplateHash: "",
   workerLogRetentionDays: 30,
 };
 
@@ -180,6 +180,7 @@ export default async function TranscoderPage({ searchParams }: { searchParams: P
               <NumberField label="Health poll interval" name="healthPollSeconds" value={policy.healthPollSeconds} hint="Seconds" />
               <NumberField label="Failures before replacement" name="maxInstanceFailures" value={policy.maxInstanceFailures} />
               <NumberField label="Attempts per mission" name="maxMissionAttempts" value={policy.maxMissionAttempts} />
+              <NumberField label="Mission runtime timeout" name="missionTimeoutSeconds" value={policy.missionTimeoutSeconds} hint="Seconds before worker replacement" />
               <NumberField label="Worker log retention" name="workerLogRetentionDays" value={policy.workerLogRetentionDays} hint="Days; 0 keeps indefinitely" />
             </div>
           </fieldset>

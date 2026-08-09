@@ -713,6 +713,7 @@ export async function updateTranscoderSupervisorConfig(formData: FormData) {
     healthPollSeconds: Math.round(boundedNumber(formData, "healthPollSeconds", 2, 60, 5)),
     maxInstanceFailures: Math.round(boundedNumber(formData, "maxInstanceFailures", 1, 20, 3)),
     maxMissionAttempts: Math.round(boundedNumber(formData, "maxMissionAttempts", 1, 10, 3)),
+    missionTimeoutSeconds: Math.round(boundedNumber(formData, "missionTimeoutSeconds", 60, 86_400, 1_800)),
     workerLogRetentionDays: Math.round(boundedNumber(formData, "workerLogRetentionDays", 0, 3650, 30)),
     vastTemplateHash,
   };

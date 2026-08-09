@@ -682,6 +682,7 @@ model TranscoderSupervisorConfig {
   healthPollSeconds      Int      @default(5)
   maxInstanceFailures    Int      @default(3)
   maxMissionAttempts     Int      @default(3)
+  missionTimeoutSeconds  Int      @default(1800)
   workerLogRetentionDays Int      @default(30)
   vastTemplateHash       String
   policyVersion          Int      @default(1)
