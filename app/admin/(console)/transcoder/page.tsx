@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { PageHeader, EmptyState } from "@/app/admin/_components/admin-shell";
 import { FleetVisibility, LiveTranscoderRefresh } from "@/components/admin/transcoder-live-controls";
 import { TranscoderPolicyDialog, type TranscoderPolicyValue } from "@/components/admin/transcoder-policy-dialog";
+import { LogPagination, LogPageSizeSelect } from "@/components/admin/log-pagination";
 import { getTranscoderSupervisorOverview } from "@/lib/admin-data";
 import { formatDate } from "@/lib/admin-format";
 
@@ -35,7 +36,7 @@ function StateTag({ value }: { value: string }) {
   return <span className={`transcoder-state transcoder-state-${tone}`}>{value.replaceAll("_", " ")}</span>;
 }
 
-export default async function TranscoderPage({ searchParams }: { searchParams: Promise<{ updated?: string; error?: string; logLevel?: string; logJob?: string; logInstance?: string; logFrom?: string; logTo?: string; logPage?: string }> }) {
+export default async function TranscoderPage({ searchParams }: { searchParams: Promise<{ updated?: string; error?: string; logLevel?: string; logJob?: string; logInstance?: string; logFrom?: string; logTo?: string; logPage?: string; logPageSize?: string; eventPage?: string; eventPageSize?: string }> }) {
   const params = await searchParams;
   const data = await getTranscoderSupervisorOverview({
     level: params.logLevel,
@@ -44,8 +45,11 @@ export default async function TranscoderPage({ searchParams }: { searchParams: P
     from: params.logFrom,
     to: params.logTo,
     page: Number(params.logPage) || 0,
+    pageSize: Number(params.logPageSize),
+    eventPage: Number(params.eventPage) || 0,
+    eventPageSize: Number(params.eventPageSize),
   });
-  const { config, instances, missions, events, counts, completed24h, failed24h, workerLogs, workerLogFilteredCount, workerLogPage, workerLogs24h, workerErrors24h, supervisorHealth } = data;
+  const { config, instances, missions, events, counts, completed24h, failed24h, workerLogs, workerLogFilteredCount, workerLogPage, workerLogPageSize, supervisorEventCount, supervisorEventPage, supervisorEventPageSize, workerLogs24h, workerErrors24h, supervisorHealth } = data;
   const policy = config ?? defaults;
   const total24h = completed24h + failed24h;
   const successRate = total24h ? `${((completed24h / total24h) * 100).toFixed(1)}%` : "—";
@@ -62,12 +66,15 @@ export default async function TranscoderPage({ searchParams }: { searchParams: P
     policyVersion: config?.policyVersion,
   };
   const statusTitle = supervisorHealth.status === "healthy" ? "Supervisor connected" : supervisorHealth.status === "degraded" ? "Supervisor needs attention" : supervisorHealth.status === "unconfigured" ? "Supervisor not configured" : "Supervisor unreachable";
-  const logPageHref = (page: number) => {
+  const transcoderHref = (changes: Record<string, string | number | undefined>, anchor: string) => {
     const query = new URLSearchParams();
-    const preserved: Record<string, string | undefined> = { logLevel: params.logLevel, logJob: params.logJob, logInstance: params.logInstance, logFrom: params.logFrom, logTo: params.logTo };
+    const preserved: Record<string, string | undefined> = { logLevel: params.logLevel, logJob: params.logJob, logInstance: params.logInstance, logFrom: params.logFrom, logTo: params.logTo, logPage: String(workerLogPage), logPageSize: String(workerLogPageSize), eventPage: String(supervisorEventPage), eventPageSize: String(supervisorEventPageSize) };
     for (const [key, value] of Object.entries(preserved)) if (value) query.set(key, value);
-    query.set("logPage", String(page));
-    return `/admin/transcoder?${query.toString()}`;
+    for (const [key, value] of Object.entries(changes)) {
+      if (value === undefined) query.delete(key);
+      else query.set(key, String(value));
+    }
+    return `/admin/transcoder?${query.toString()}${anchor}`;
   };
 
   return <>
@@ -134,18 +141,26 @@ export default async function TranscoderPage({ searchParams }: { searchParams: P
         <input name="logInstance" defaultValue={params.logInstance || ""} placeholder="Vast instance ID" aria-label="Vast instance ID" />
         <label><span>From · UTC</span><input name="logFrom" type="datetime-local" defaultValue={params.logFrom || ""} aria-label="Logs from, UTC" /></label>
         <label><span>Until · UTC</span><input name="logTo" type="datetime-local" defaultValue={params.logTo || ""} aria-label="Logs until, UTC" /></label>
+        <LogPageSizeSelect name="logPageSize" value={workerLogPageSize} />
+        <input type="hidden" name="eventPage" value={supervisorEventPage} />
+        <input type="hidden" name="eventPageSize" value={supervisorEventPageSize} />
         <button type="submit">Apply filters</button>
         {(params.logLevel || params.logJob || params.logInstance || params.logFrom || params.logTo) ? <a href="/admin/transcoder#logs">Clear</a> : null}
       </form>
       {workerLogs.length ? <div className="admin-table-wrap"><table className="admin-table transcoder-log-table"><thead><tr><th>Level</th><th>Message</th><th>Job</th><th>Instance</th><th>Context</th><th>Occurred</th></tr></thead><tbody>{workerLogs.map((item) => <tr key={item.id}><td><StateTag value={item.level} /></td><td className="transcoder-message-cell">{item.message}</td><td><code>{item.jobId ?? "—"}</code></td><td>{item.vastInstanceId ?? item.instanceLabel ?? "—"}</td><td>{item.context ? <details className="transcoder-context"><summary>Inspect</summary><pre>{JSON.stringify(item.context, null, 2)}</pre></details> : "—"}</td><td>{formatDate(item.occurredAt)}</td></tr>)}</tbody></table></div> : <EmptyState>No worker logs match these filters.</EmptyState>}
-      {workerLogFilteredCount > 250 ? <nav className="transcoder-log-pagination" aria-label="Worker log pages">{workerLogPage > 0 ? <a href={logPageHref(workerLogPage - 1)}>Previous</a> : <span /> }<small>Page {workerLogPage + 1} of {Math.ceil(workerLogFilteredCount / 250)}</small>{(workerLogPage + 1) * 250 < workerLogFilteredCount ? <a href={logPageHref(workerLogPage + 1)}>Next</a> : <span />}</nav> : null}
+      <LogPagination label="Transcoder worker log" total={workerLogFilteredCount} page={workerLogPage} pageSize={workerLogPageSize} hrefForPage={(page) => transcoderHref({ logPage: page }, "#logs")} />
     </section>
 
     <TranscoderPolicyDialog policy={policyValue} />
 
     <section className="admin-panel transcoder-event-panel" id="events">
-      <header className="transcoder-section-title"><div><p>Structured diagnostics</p><h2>Supervisor events</h2></div><span>{events.length} most recent</span></header>
+      <header className="transcoder-section-title"><div><p>Structured diagnostics</p><h2>Supervisor events</h2></div><span>{supervisorEventCount.toLocaleString()} total events</span></header>
+      <form className="admin-toolbar transcoder-log-toolbar" method="get" action="/admin/transcoder#events">
+        <input type="hidden" name="logLevel" value={params.logLevel || ""} /><input type="hidden" name="logJob" value={params.logJob || ""} /><input type="hidden" name="logInstance" value={params.logInstance || ""} /><input type="hidden" name="logFrom" value={params.logFrom || ""} /><input type="hidden" name="logTo" value={params.logTo || ""} /><input type="hidden" name="logPage" value={workerLogPage} /><input type="hidden" name="logPageSize" value={workerLogPageSize} />
+        <LogPageSizeSelect name="eventPageSize" value={supervisorEventPageSize} /><button type="submit">Update view</button>
+      </form>
       {events.length ? <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Severity</th><th>Code</th><th>Message</th><th>Context</th><th>Time</th></tr></thead><tbody>{events.map((item) => <tr key={String(item.id)}><td><StateTag value={item.severity} /></td><td><code>{item.code}</code></td><td className="transcoder-message-cell">{item.message}</td><td>{item.context ? <details className="transcoder-context"><summary>Inspect</summary><pre>{JSON.stringify(item.context, null, 2)}</pre></details> : "—"}</td><td>{formatDate(item.createdAt)}</td></tr>)}</tbody></table></div> : <EmptyState>No supervisor events have been recorded.</EmptyState>}
+      <LogPagination label="Supervisor event" total={supervisorEventCount} page={supervisorEventPage} pageSize={supervisorEventPageSize} hrefForPage={(page) => transcoderHref({ eventPage: page }, "#events")} />
     </section>
   </>;
 }

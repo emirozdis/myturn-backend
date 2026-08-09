@@ -3,6 +3,7 @@ import "server-only";
 import { ListObjectsV2Command } from "@aws-sdk/client-s3";
 import { unstable_cache } from "next/cache";
 import { db } from "@/lib/db";
+import { parseAdminLogPage, parseAdminLogPageSize } from "@/lib/admin-pagination";
 import { r2Client } from "@/lib/r2";
 
 export type ServiceHealth = {
@@ -142,7 +143,7 @@ async function checkTranscoder(): Promise<TranscoderSupervisorHealth> {
   }
 }
 
-export async function getTranscoderSupervisorOverview(filters: { level?: string; jobId?: string; instanceId?: string; from?: string; to?: string; page?: number } = {}) {
+export async function getTranscoderSupervisorOverview(filters: { level?: string; jobId?: string; instanceId?: string; from?: string; to?: string; page?: number; pageSize?: number; eventPage?: number; eventPageSize?: number } = {}) {
   const since = new Date(Date.now() - 24 * 60 * 60 * 1_000);
   const allowedLogLevels = ["silly", "debug", "http", "info", "warn", "error", "fatal"];
   const logLevel = allowedLogLevels.includes(filters.level || "") ? filters.level : undefined;
@@ -152,22 +153,26 @@ export async function getTranscoderSupervisorOverview(filters: { level?: string;
   const parsedTo = filters.to ? new Date(`${filters.to.replace(/Z$/, "")}Z`) : null;
   const from = parsedFrom && !Number.isNaN(parsedFrom.getTime()) ? parsedFrom : undefined;
   const to = parsedTo && !Number.isNaN(parsedTo.getTime()) ? parsedTo : undefined;
-  const page = Math.max(0, Math.min(10_000, Math.floor(filters.page || 0)));
+  const page = parseAdminLogPage(filters.page);
+  const pageSize = parseAdminLogPageSize(filters.pageSize);
+  const eventPage = parseAdminLogPage(filters.eventPage);
+  const eventPageSize = parseAdminLogPageSize(filters.eventPageSize);
   const workerLogWhere = {
     ...(logLevel ? { level: logLevel } : {}),
     ...(jobId ? { jobId: { contains: jobId, mode: "insensitive" as const } } : {}),
     ...(vastInstanceId ? { vastInstanceId } : {}),
     ...(from || to ? { occurredAt: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}),
   };
-  const [config, instances, missions, events, missionStatus, completed24h, failed24h, workerLogs, workerLogFilteredCount, workerLogs24h, workerErrors24h, supervisorHealth] = await Promise.all([
+  const [config, instances, missions, events, eventCount, missionStatus, completed24h, failed24h, workerLogs, workerLogFilteredCount, workerLogs24h, workerErrors24h, supervisorHealth] = await Promise.all([
     db.transcoderSupervisorConfig.findUnique({ where: { id: "default" } }),
     db.transcoderInstance.findMany({ orderBy: { updatedAt: "desc" }, take: 100 }),
     db.transcoderMission.findMany({ orderBy: { registeredAt: "desc" }, take: 100 }),
-    db.transcoderSupervisorEvent.findMany({ orderBy: { createdAt: "desc" }, take: 150 }),
+    db.transcoderSupervisorEvent.findMany({ orderBy: { createdAt: "desc" }, skip: eventPage * eventPageSize, take: eventPageSize }),
+    db.transcoderSupervisorEvent.count(),
     db.transcoderMission.groupBy({ by: ["status"], _count: { _all: true } }),
     db.transcoderMission.count({ where: { status: "SUCCEEDED", completedAt: { gte: since } } }),
     db.transcoderMission.count({ where: { status: "FAILED_PERMANENTLY", completedAt: { gte: since } } }),
-    db.transcoderWorkerLog.findMany({ where: workerLogWhere, orderBy: { occurredAt: "desc" }, skip: page * 250, take: 250 }),
+    db.transcoderWorkerLog.findMany({ where: workerLogWhere, orderBy: { occurredAt: "desc" }, skip: page * pageSize, take: pageSize }),
     db.transcoderWorkerLog.count({ where: workerLogWhere }),
     db.transcoderWorkerLog.count({ where: { occurredAt: { gte: since } } }),
     db.transcoderWorkerLog.count({ where: { occurredAt: { gte: since }, level: { in: ["error", "fatal"] } } }),
@@ -185,6 +190,10 @@ export async function getTranscoderSupervisorOverview(filters: { level?: string;
     workerLogs,
     workerLogFilteredCount,
     workerLogPage: page,
+    workerLogPageSize: pageSize,
+    supervisorEventCount: eventCount,
+    supervisorEventPage: eventPage,
+    supervisorEventPageSize: eventPageSize,
     workerLogs24h,
     workerErrors24h,
     supervisorHealth,
@@ -336,17 +345,31 @@ export async function getSurveys() {
   });
 }
 
-export async function getIncidents(level: string, source: string) {
-  return db.backendIncident.findMany({
-    where: {
-      ...(level && level !== "all" ? { level: level as "warn" | "error" | "fatal" } : {}),
-      ...(source && source !== "all" ? { source: source as "server" | "client" } : {}),
-    },
-    orderBy: { createdAt: "desc" },
-    take: 150,
-  });
+export async function getIncidents(level: string, source: string, pagination: { page?: number; pageSize?: number } = {}) {
+  const page = parseAdminLogPage(pagination.page);
+  const pageSize = parseAdminLogPageSize(pagination.pageSize);
+  const where = {
+    ...(level && level !== "all" ? { level: level as "warn" | "error" | "fatal" } : {}),
+    ...(source && source !== "all" ? { source: source as "server" | "client" } : {}),
+  };
+  const [items, total] = await Promise.all([
+    db.backendIncident.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      skip: page * pageSize,
+      take: pageSize,
+    }),
+    db.backendIncident.count({ where }),
+  ]);
+  return { items, total, page, pageSize };
 }
 
-export async function getAuditLogs() {
-  return db.adminAuditLog.findMany({ orderBy: { createdAt: "desc" }, take: 150 });
+export async function getAuditLogs(pagination: { page?: number; pageSize?: number } = {}) {
+  const page = parseAdminLogPage(pagination.page);
+  const pageSize = parseAdminLogPageSize(pagination.pageSize);
+  const [items, total] = await Promise.all([
+    db.adminAuditLog.findMany({ orderBy: { createdAt: "desc" }, skip: page * pageSize, take: pageSize }),
+    db.adminAuditLog.count(),
+  ]);
+  return { items, total, page, pageSize };
 }

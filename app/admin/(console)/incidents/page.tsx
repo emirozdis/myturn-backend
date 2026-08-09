@@ -4,20 +4,25 @@ import { formatDate } from "@/lib/admin-format";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { DetailDialogRow, DetailGrid, DetailItem, DetailSection } from "@/components/admin/detail-dialog";
+import { LogPagination, LogPageSizeSelect } from "@/components/admin/log-pagination";
 
 export const dynamic = "force-dynamic";
 
-export default async function AdminIncidentsPage({ searchParams }: { searchParams: Promise<{ level?: string; source?: string }> }) {
+export default async function AdminIncidentsPage({ searchParams }: { searchParams: Promise<{ level?: string; source?: string; page?: string; pageSize?: string }> }) {
   const params = await searchParams;
   const level = ["all", "warn", "error", "fatal"].includes(params.level || "") ? params.level! : "all";
   const source = ["all", "server", "client"].includes(params.source || "") ? params.source! : "all";
-  const incidents = await getIncidents(level, source);
+  const { items: incidents, total, page, pageSize } = await getIncidents(level, source, { page: Number(params.page), pageSize: Number(params.pageSize) });
+  const pageHref = (nextPage: number) => {
+    const query = new URLSearchParams({ level, source, page: String(nextPage), pageSize: String(pageSize) });
+    return `/admin/incidents?${query.toString()}`;
+  };
 
   return (
     <>
       <PageHeader eyebrow="Observability" title="Logs & errors" description="Inspect persisted server and client incidents with request and release context." />
       <section className="admin-panel table-panel">
-        <form className="admin-toolbar" method="get"><select name="level" defaultValue={level} aria-label="Severity"><option value="all">All severities</option><option value="warn">Warnings</option><option value="error">Errors</option><option value="fatal">Fatal</option></select><select name="source" defaultValue={source} aria-label="Source"><option value="all">All sources</option><option value="server">Server</option><option value="client">Client</option></select><button type="submit">Apply filters</button><small>{incidents.length} incidents</small></form>
+        <form className="admin-toolbar" method="get"><select name="level" defaultValue={level} aria-label="Severity"><option value="all">All severities</option><option value="warn">Warnings</option><option value="error">Errors</option><option value="fatal">Fatal</option></select><select name="source" defaultValue={source} aria-label="Source"><option value="all">All sources</option><option value="server">Server</option><option value="client">Client</option></select><LogPageSizeSelect name="pageSize" value={pageSize} /><button type="submit">Apply filters</button><small>{total.toLocaleString()} matching incidents</small></form>
         {incidents.length ? <div className="admin-table-wrap"><table className="admin-table incident-table"><thead><tr><th>Severity</th><th>Event</th><th>Source</th><th>Route</th><th>Status</th><th>Time</th><th><span className="sr-only">View</span></th></tr></thead><tbody>{incidents.map((incident) => (
           <DetailDialogRow
             key={incident.id}
@@ -43,6 +48,7 @@ export default async function AdminIncidentsPage({ searchParams }: { searchParam
             <td>{incident.source}</td><td>{incident.route || "—"}</td><td>{incident.status || "—"}</td><td>{formatDate(incident.createdAt)}</td><td><span className="row-view-label">View</span></td>
           </DetailDialogRow>
         ))}</tbody></table></div> : <EmptyState>No incidents match these filters.</EmptyState>}
+        <LogPagination label="Incident log" total={total} page={page} pageSize={pageSize} hrefForPage={pageHref} />
       </section>
     </>
   );
