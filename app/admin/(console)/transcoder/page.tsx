@@ -1,7 +1,8 @@
-import { Activity, Cpu, Database, Radio, Server, ShieldCheck, SlidersHorizontal, Timer, TriangleAlert, Workflow } from "lucide-react";
+import { Activity, Database, Radio, Server, ShieldCheck, Timer, TriangleAlert, Workflow } from "lucide-react";
 import type { ReactNode } from "react";
 import { PageHeader, EmptyState } from "@/app/admin/_components/admin-shell";
-import { updateTranscoderSupervisorConfig } from "@/app/admin/actions";
+import { FleetVisibility, LiveTranscoderRefresh } from "@/components/admin/transcoder-live-controls";
+import { TranscoderPolicyDialog, type TranscoderPolicyValue } from "@/components/admin/transcoder-policy-dialog";
 import { getTranscoderSupervisorOverview } from "@/lib/admin-data";
 import { formatDate } from "@/lib/admin-format";
 
@@ -17,10 +18,6 @@ const defaults = {
   maxInstanceFailures: 3, maxMissionAttempts: 3, missionTimeoutSeconds: 1800, vastTemplateHash: "",
   workerLogRetentionDays: 30,
 };
-
-function NumberField({ label, name, value, step = "1", hint }: { label: string; name: string; value: string | number; step?: string; hint?: string }) {
-  return <label><span>{label}</span><input className="admin-form-input" name={name} type="number" step={step} defaultValue={String(value)} required />{hint ? <small>{hint}</small> : null}</label>;
-}
 
 function MetricCard({ label, value, note, tone, icon }: { label: string; value: string | number; note: string; tone?: string; icon: ReactNode }) {
   return <article className={`transcoder-metric ${tone || ""}`}><header>{icon}<span>{label}</span></header><strong>{value}</strong><small>{note}</small></article>;
@@ -54,6 +51,16 @@ export default async function TranscoderPage({ searchParams }: { searchParams: P
   const successRate = total24h ? `${((completed24h / total24h) * 100).toFixed(1)}%` : "—";
   const runningWorkers = instances.filter((item) => item.state === "RUNNING").length;
   const healthyWorkers = instances.filter((item) => item.healthStatus === "HEALTHY" && item.state === "RUNNING").length;
+  const fleetActive = instances.filter((item) => ["PROVISIONING", "RUNNING", "STOPPING", "REPLACING"].includes(item.state)).length;
+  const fleetAttention = instances.filter((item) => item.healthStatus === "UNHEALTHY" || item.state === "REPLACING").length;
+  const fleetStopped = instances.filter((item) => item.state === "STOPPED").length;
+  const fleetHistory = instances.filter((item) => ["DESTROYED", "REPLACED"].includes(item.state)).length;
+  const policyValue: TranscoderPolicyValue = {
+    ...policy,
+    maxHourlyPrice: Number(policy.maxHourlyPrice),
+    allowedGpuModels: [...policy.allowedGpuModels],
+    policyVersion: config?.policyVersion,
+  };
   const statusTitle = supervisorHealth.status === "healthy" ? "Supervisor connected" : supervisorHealth.status === "degraded" ? "Supervisor needs attention" : supervisorHealth.status === "unconfigured" ? "Supervisor not configured" : "Supervisor unreachable";
   const logPageHref = (page: number) => {
     const query = new URLSearchParams();
@@ -68,7 +75,7 @@ export default async function TranscoderPage({ searchParams }: { searchParams: P
       eyebrow="Vast.ai orchestration"
       title="Transcoder control plane"
       description="Fleet health, mission flow, capacity rules, and durable worker diagnostics in one operational view."
-      action={<nav className="transcoder-jump-nav" aria-label="Transcoder sections"><a href="#fleet">Fleet</a><a href="#missions">Missions</a><a href="#logs">Logs</a><a href="#policy">Policy</a></nav>}
+      action={<div className="transcoder-header-actions"><LiveTranscoderRefresh /><nav className="transcoder-jump-nav" aria-label="Transcoder sections"><a href="#fleet">Fleet</a><a href="#missions">Missions</a><a href="#logs">Logs</a><a href="#policy">Policy</a></nav></div>}
     />
 
     {params.updated ? <div className="version-policy-success" role="status">Policy saved. The supervisor will use it on its next reconciliation cycle.</div> : null}
@@ -110,7 +117,7 @@ export default async function TranscoderPage({ searchParams }: { searchParams: P
     <div className="transcoder-data-grid">
       <section className="admin-panel transcoder-data-panel" id="fleet">
         <header className="transcoder-section-title"><div><p>Managed capacity</p><h2>Fleet</h2></div><span>{runningWorkers} running · {instances.length} recorded</span></header>
-        {instances.length ? <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Vast ID</th><th>Lifecycle</th><th>Health</th><th>GPU</th><th>Machine</th><th>Rate</th><th>Jobs</th><th>Heartbeat</th></tr></thead><tbody>{instances.map((item) => <tr key={item.id}><td><code>{item.vastInstanceId}</code></td><td><StateTag value={item.state} /></td><td><StateTag value={item.healthStatus} /></td><td>{item.gpuName ?? "—"}</td><td>{item.fullMachine ? "Full" : "Shared"}</td><td>{item.hourlyPrice ? `$${item.hourlyPrice}/h` : "—"}</td><td>{item.successfulJobs} ok · {item.failedJobs} failed</td><td>{item.lastHeartbeatAt ? formatDate(item.lastHeartbeatAt) : "—"}</td></tr>)}</tbody></table></div> : <EmptyState>No instances have been provisioned. The first queued mission will start capacity when orchestration is enabled.</EmptyState>}
+        {instances.length ? <FleetVisibility counts={{ active: fleetActive, attention: fleetAttention, stopped: fleetStopped, history: fleetHistory, all: instances.length }}><div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Vast ID</th><th>Lifecycle</th><th>Health</th><th>GPU</th><th>Machine</th><th>Rate</th><th>Jobs</th><th>Heartbeat</th></tr></thead><tbody>{instances.map((item) => <tr key={item.id} data-fleet-active={["PROVISIONING", "RUNNING", "STOPPING", "REPLACING"].includes(item.state)} data-fleet-attention={item.healthStatus === "UNHEALTHY" || item.state === "REPLACING"} data-fleet-stopped={item.state === "STOPPED"} data-fleet-history={["DESTROYED", "REPLACED"].includes(item.state)}><td><code>{item.vastInstanceId}</code></td><td><StateTag value={item.state} /></td><td><StateTag value={item.healthStatus} /></td><td>{item.gpuName ?? "—"}</td><td>{item.fullMachine ? "Full" : "Shared"}</td><td>{item.hourlyPrice ? `$${item.hourlyPrice}/h` : "—"}</td><td>{item.successfulJobs} ok · {item.failedJobs} failed</td><td>{item.lastHeartbeatAt ? formatDate(item.lastHeartbeatAt) : "—"}</td></tr>)}</tbody></table></div></FleetVisibility> : <EmptyState>No instances have been provisioned. The first queued mission will start capacity when orchestration is enabled.</EmptyState>}
       </section>
 
       <section className="admin-panel transcoder-data-panel" id="missions">
@@ -134,68 +141,11 @@ export default async function TranscoderPage({ searchParams }: { searchParams: P
       {workerLogFilteredCount > 250 ? <nav className="transcoder-log-pagination" aria-label="Worker log pages">{workerLogPage > 0 ? <a href={logPageHref(workerLogPage - 1)}>Previous</a> : <span /> }<small>Page {workerLogPage + 1} of {Math.ceil(workerLogFilteredCount / 250)}</small>{(workerLogPage + 1) * 250 < workerLogFilteredCount ? <a href={logPageHref(workerLogPage + 1)}>Next</a> : <span />}</nav> : null}
     </section>
 
-    <details className="admin-panel transcoder-policy" id="policy" open>
-      <summary><span><SlidersHorizontal aria-hidden="true" /><span><small>Provisioning and scaling</small><strong>Worker policy</strong></span></span><span>Version {config?.policyVersion ?? "not configured"} · click to collapse</span></summary>
-      <form action={updateTranscoderSupervisorConfig}>
-        <div className="transcoder-checks">
-          <label><input name="enabled" type="checkbox" defaultChecked={policy.enabled} /><span><strong>Enable orchestration</strong><small>Allows worker startup and dispatch</small></span></label>
-          <label><input name="verifiedOnly" type="checkbox" defaultChecked={policy.verifiedOnly} /><span><strong>Verified hosts</strong><small>Require Vast verification</small></span></label>
-          <label><input name="datacenterOnly" type="checkbox" defaultChecked={policy.datacenterOnly} /><span><strong>Datacenter only</strong><small>Exclude residential hosts</small></span></label>
-          <label><input name="requireFullMachine" type="checkbox" defaultChecked={policy.requireFullMachine} /><span><strong>Full machine only</strong><small>Require full CPU and RAM allocation</small></span></label>
-        </div>
-
-        <div className="transcoder-policy-groups">
-          <fieldset>
-            <legend><Cpu aria-hidden="true" /><span>Template and hardware</span></legend>
-            <div className="transcoder-fields">
-              <label className="transcoder-wide"><span>Vast template hash</span><input className="admin-form-input" name="vastTemplateHash" defaultValue={policy.vastTemplateHash} required /><small>Hash ID for the private myturn-transcoder template</small></label>
-              <label className="transcoder-wide"><span>Allowed GPU models</span><input className="admin-form-input" name="allowedGpuModels" defaultValue={policy.allowedGpuModels.join(", ")} placeholder="Blank allows any model" /><small>Comma separated; names must match Vast exactly</small></label>
-              <NumberField label="Minimum GPU RAM" name="minimumGpuRamMb" value={policy.minimumGpuRamMb} hint="MB per GPU" />
-              <NumberField label="Minimum CPU cores" name="minimumCpuCores" value={policy.minimumCpuCores} />
-              <NumberField label="Minimum system RAM" name="minimumRamMb" value={policy.minimumRamMb} hint="MB allocated" />
-              <NumberField label="Disk size" name="diskGb" value={policy.diskGb} hint="GB per worker" />
-            </div>
-          </fieldset>
-
-          <fieldset>
-            <legend><ShieldCheck aria-hidden="true" /><span>Offer quality and budget</span></legend>
-            <div className="transcoder-fields">
-              <NumberField label="Maximum hourly price" name="maxHourlyPrice" value={Number(policy.maxHourlyPrice)} step="0.01" hint="USD per worker" />
-              <NumberField label="Minimum reliability" name="minimumReliability" value={policy.minimumReliability} step="0.001" hint="0.98 = 98%" />
-              <NumberField label="Minimum download" name="minimumDownloadMbps" value={policy.minimumDownloadMbps} step="0.1" hint="Mbps" />
-              <NumberField label="Minimum upload" name="minimumUploadMbps" value={policy.minimumUploadMbps} step="0.1" hint="Mbps" />
-              <NumberField label="Offer search limit" name="offerSearchLimit" value={policy.offerSearchLimit} hint="Candidates per search" />
-            </div>
-          </fieldset>
-
-          <fieldset>
-            <legend><SettingsIcon /><span>Capacity and recovery</span></legend>
-            <div className="transcoder-fields">
-              <NumberField label="Maximum workers" name="maxWorkers" value={policy.maxWorkers} />
-              <NumberField label="Jobs per worker" name="jobsPerWorker" value={policy.jobsPerWorker} />
-              <NumberField label="Queue depth per new worker" name="queueDepthPerNewWorker" value={policy.queueDepthPerNewWorker} />
-              <NumberField label="Idle timeout" name="idleTimeoutSeconds" value={policy.idleTimeoutSeconds} hint="Seconds" />
-              <label><span>Idle action</span><select className="admin-form-input" name="idleAction" defaultValue={policy.idleAction}><option value="DESTROY">Destroy instance</option><option value="STOP">Stop instance</option></select><small>Applied after the idle timeout</small></label>
-              <NumberField label="Startup timeout" name="startupTimeoutSeconds" value={policy.startupTimeoutSeconds} hint="Seconds before replacement" />
-              <NumberField label="Health poll interval" name="healthPollSeconds" value={policy.healthPollSeconds} hint="Seconds" />
-              <NumberField label="Failures before replacement" name="maxInstanceFailures" value={policy.maxInstanceFailures} />
-              <NumberField label="Attempts per mission" name="maxMissionAttempts" value={policy.maxMissionAttempts} />
-              <NumberField label="Mission runtime timeout" name="missionTimeoutSeconds" value={policy.missionTimeoutSeconds} hint="Seconds before worker replacement" />
-              <NumberField label="Worker log retention" name="workerLogRetentionDays" value={policy.workerLogRetentionDays} hint="Days; 0 keeps indefinitely" />
-            </div>
-          </fieldset>
-        </div>
-        <footer><p>Changes are durable and picked up on the supervisor’s next reconciliation cycle. Full-machine classification requires full CPU, RAM, GPU allocation, and a non-VM host signal.</p><button type="submit">Save worker policy</button></footer>
-      </form>
-    </details>
+    <TranscoderPolicyDialog policy={policyValue} />
 
     <section className="admin-panel transcoder-event-panel" id="events">
       <header className="transcoder-section-title"><div><p>Structured diagnostics</p><h2>Supervisor events</h2></div><span>{events.length} most recent</span></header>
       {events.length ? <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Severity</th><th>Code</th><th>Message</th><th>Context</th><th>Time</th></tr></thead><tbody>{events.map((item) => <tr key={String(item.id)}><td><StateTag value={item.severity} /></td><td><code>{item.code}</code></td><td className="transcoder-message-cell">{item.message}</td><td>{item.context ? <details className="transcoder-context"><summary>Inspect</summary><pre>{JSON.stringify(item.context, null, 2)}</pre></details> : "—"}</td><td>{formatDate(item.createdAt)}</td></tr>)}</tbody></table></div> : <EmptyState>No supervisor events have been recorded.</EmptyState>}
     </section>
   </>;
-}
-
-function SettingsIcon() {
-  return <SlidersHorizontal aria-hidden="true" />;
 }
