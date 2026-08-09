@@ -12,6 +12,14 @@ export type ServiceHealth = {
   latencyMs?: number;
 };
 
+export type TranscoderSupervisorHealth = ServiceHealth & {
+  endpoint?: string;
+  checkedAt: Date;
+  database?: string;
+  policyConfigured?: boolean;
+  httpStatus?: number;
+};
+
 export type StorageSummary = {
   bytes: number;
   objects: number;
@@ -86,10 +94,11 @@ const readStorageSummary = unstable_cache(async (): Promise<StorageSummary> => {
   }
 }, ["admin-storage-summary"], { revalidate: 300 });
 
-async function checkTranscoder(): Promise<ServiceHealth> {
+async function checkTranscoder(): Promise<TranscoderSupervisorHealth> {
+  const checkedAt = new Date();
   const configuredUrl = process.env.TRANSCODER_SUPERVISOR_URL;
   if (!configuredUrl) {
-    return { name: "Transcoder supervisor", status: "unconfigured", detail: "Supervisor endpoint is not configured" };
+    return { name: "Transcoder supervisor", status: "unconfigured", detail: "Supervisor endpoint is not configured", checkedAt };
   }
 
   const startedAt = Date.now();
@@ -97,12 +106,39 @@ async function checkTranscoder(): Promise<ServiceHealth> {
     const url = new URL("/health", new URL(configuredUrl).origin);
     const response = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(3_000) });
     const latencyMs = Date.now() - startedAt;
-    if (!response.ok) {
-      return { name: "Transcoder supervisor", status: "offline", detail: `HTTP ${response.status}`, latencyMs };
-    }
-    return { name: "Transcoder supervisor", status: "healthy", detail: "Mission orchestration is reachable", latencyMs };
-  } catch {
-    return { name: "Transcoder supervisor", status: "offline", detail: "Supervisor health check timed out", latencyMs: Date.now() - startedAt };
+    const body = await response.json().catch(() => ({})) as { status?: string; database?: string; policyConfigured?: boolean };
+    const reportedStatus = body.status?.toLowerCase();
+    const status = response.ok && reportedStatus === "healthy"
+      ? "healthy"
+      : reportedStatus === "degraded" || (response.status >= 400 && response.status < 500)
+        ? "degraded"
+        : "offline";
+    const detail = status === "healthy"
+      ? "Supervisor API and orchestration loop are reachable"
+      : reportedStatus === "degraded"
+        ? "Supervisor is reachable but its policy is incomplete"
+        : `Supervisor health endpoint returned HTTP ${response.status}`;
+    return {
+      name: "Transcoder supervisor",
+      status,
+      detail,
+      latencyMs,
+      endpoint: url.origin,
+      checkedAt,
+      database: body.database,
+      policyConfigured: body.policyConfigured,
+      httpStatus: response.status,
+    };
+  } catch (error) {
+    const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+    return {
+      name: "Transcoder supervisor",
+      status: "offline",
+      detail: timedOut ? "Supervisor health check timed out after 3 seconds" : "Supervisor health endpoint could not be reached",
+      latencyMs: Date.now() - startedAt,
+      endpoint: (() => { try { return new URL(configuredUrl).origin; } catch { return configuredUrl; } })(),
+      checkedAt,
+    };
   }
 }
 
@@ -123,7 +159,7 @@ export async function getTranscoderSupervisorOverview(filters: { level?: string;
     ...(vastInstanceId ? { vastInstanceId } : {}),
     ...(from || to ? { occurredAt: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}),
   };
-  const [config, instances, missions, events, missionStatus, completed24h, failed24h, workerLogs, workerLogFilteredCount, workerLogs24h, workerErrors24h] = await Promise.all([
+  const [config, instances, missions, events, missionStatus, completed24h, failed24h, workerLogs, workerLogFilteredCount, workerLogs24h, workerErrors24h, supervisorHealth] = await Promise.all([
     db.transcoderSupervisorConfig.findUnique({ where: { id: "default" } }),
     db.transcoderInstance.findMany({ orderBy: { updatedAt: "desc" }, take: 100 }),
     db.transcoderMission.findMany({ orderBy: { registeredAt: "desc" }, take: 100 }),
@@ -135,6 +171,7 @@ export async function getTranscoderSupervisorOverview(filters: { level?: string;
     db.transcoderWorkerLog.count({ where: workerLogWhere }),
     db.transcoderWorkerLog.count({ where: { occurredAt: { gte: since } } }),
     db.transcoderWorkerLog.count({ where: { occurredAt: { gte: since }, level: { in: ["error", "fatal"] } } }),
+    checkTranscoder(),
   ]);
 
   return {
@@ -150,6 +187,7 @@ export async function getTranscoderSupervisorOverview(filters: { level?: string;
     workerLogPage: page,
     workerLogs24h,
     workerErrors24h,
+    supervisorHealth,
   };
 }
 
