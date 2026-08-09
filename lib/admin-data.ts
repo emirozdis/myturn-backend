@@ -87,9 +87,9 @@ const readStorageSummary = unstable_cache(async (): Promise<StorageSummary> => {
 }, ["admin-storage-summary"], { revalidate: 300 });
 
 async function checkTranscoder(): Promise<ServiceHealth> {
-  const configuredUrl = process.env.TRANSCODER_API_URL;
+  const configuredUrl = process.env.TRANSCODER_SUPERVISOR_URL;
   if (!configuredUrl) {
-    return { name: "Transcoder", status: "unconfigured", detail: "Endpoint is not configured" };
+    return { name: "Transcoder supervisor", status: "unconfigured", detail: "Supervisor endpoint is not configured" };
   }
 
   const startedAt = Date.now();
@@ -98,12 +98,59 @@ async function checkTranscoder(): Promise<ServiceHealth> {
     const response = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(3_000) });
     const latencyMs = Date.now() - startedAt;
     if (!response.ok) {
-      return { name: "Transcoder", status: "offline", detail: `HTTP ${response.status}`, latencyMs };
+      return { name: "Transcoder supervisor", status: "offline", detail: `HTTP ${response.status}`, latencyMs };
     }
-    return { name: "Transcoder", status: "healthy", detail: "Video processing is reachable", latencyMs };
+    return { name: "Transcoder supervisor", status: "healthy", detail: "Mission orchestration is reachable", latencyMs };
   } catch {
-    return { name: "Transcoder", status: "offline", detail: "Health check timed out", latencyMs: Date.now() - startedAt };
+    return { name: "Transcoder supervisor", status: "offline", detail: "Supervisor health check timed out", latencyMs: Date.now() - startedAt };
   }
+}
+
+export async function getTranscoderSupervisorOverview(filters: { level?: string; jobId?: string; instanceId?: string; from?: string; to?: string; page?: number } = {}) {
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1_000);
+  const allowedLogLevels = ["silly", "debug", "http", "info", "warn", "error", "fatal"];
+  const logLevel = allowedLogLevels.includes(filters.level || "") ? filters.level : undefined;
+  const jobId = filters.jobId?.trim().slice(0, 128) || undefined;
+  const vastInstanceId = /^\d{1,12}$/.test(filters.instanceId || "") ? Number(filters.instanceId) : undefined;
+  const parsedFrom = filters.from ? new Date(`${filters.from.replace(/Z$/, "")}Z`) : null;
+  const parsedTo = filters.to ? new Date(`${filters.to.replace(/Z$/, "")}Z`) : null;
+  const from = parsedFrom && !Number.isNaN(parsedFrom.getTime()) ? parsedFrom : undefined;
+  const to = parsedTo && !Number.isNaN(parsedTo.getTime()) ? parsedTo : undefined;
+  const page = Math.max(0, Math.min(10_000, Math.floor(filters.page || 0)));
+  const workerLogWhere = {
+    ...(logLevel ? { level: logLevel } : {}),
+    ...(jobId ? { jobId: { contains: jobId, mode: "insensitive" as const } } : {}),
+    ...(vastInstanceId ? { vastInstanceId } : {}),
+    ...(from || to ? { occurredAt: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}),
+  };
+  const [config, instances, missions, events, missionStatus, completed24h, failed24h, workerLogs, workerLogFilteredCount, workerLogs24h, workerErrors24h] = await Promise.all([
+    db.transcoderSupervisorConfig.findUnique({ where: { id: "default" } }),
+    db.transcoderInstance.findMany({ orderBy: { updatedAt: "desc" }, take: 100 }),
+    db.transcoderMission.findMany({ orderBy: { registeredAt: "desc" }, take: 100 }),
+    db.transcoderSupervisorEvent.findMany({ orderBy: { createdAt: "desc" }, take: 150 }),
+    db.transcoderMission.groupBy({ by: ["status"], _count: { _all: true } }),
+    db.transcoderMission.count({ where: { status: "SUCCEEDED", completedAt: { gte: since } } }),
+    db.transcoderMission.count({ where: { status: "FAILED_PERMANENTLY", completedAt: { gte: since } } }),
+    db.transcoderWorkerLog.findMany({ where: workerLogWhere, orderBy: { occurredAt: "desc" }, skip: page * 250, take: 250 }),
+    db.transcoderWorkerLog.count({ where: workerLogWhere }),
+    db.transcoderWorkerLog.count({ where: { occurredAt: { gte: since } } }),
+    db.transcoderWorkerLog.count({ where: { occurredAt: { gte: since }, level: { in: ["error", "fatal"] } } }),
+  ]);
+
+  return {
+    config,
+    instances,
+    missions,
+    events,
+    counts: Object.fromEntries(missionStatus.map((item) => [item.status, item._count._all])),
+    completed24h,
+    failed24h,
+    workerLogs,
+    workerLogFilteredCount,
+    workerLogPage: page,
+    workerLogs24h,
+    workerErrors24h,
+  };
 }
 
 export async function getAdminOverview() {

@@ -10,7 +10,8 @@ const navigation = [
   { href: "/admin/feedback", label: "Feedback", mark: "04" },
   { href: "/admin/surveys", label: "Surveys", mark: "05" },
   { href: "/admin/versions", label: "App versions", mark: "06" },
-  { href: "/admin/audit", label: "Audit trail", mark: "07" },
+  { href: "/admin/transcoder", label: "Transcoder", mark: "07" },
+  { href: "/admin/audit", label: "Audit trail", mark: "08" },
 ];
 
 export function AdminShell({ session, children }: { session: AdminSession; children: ReactNode }) {

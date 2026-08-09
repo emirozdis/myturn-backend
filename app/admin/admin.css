@@ -203,6 +203,17 @@
 .admin-clickable-card { @apply cursor-pointer outline-none transition hover:-translate-y-px hover:border-neutral-400 hover:shadow-md focus-visible:border-black focus-visible:ring-2 focus-visible:ring-neutral-300; }
 
 /* Login */
+.transcoder-metrics { @apply mb-5 grid grid-cols-5 gap-3; }
+.transcoder-metrics article { @apply grid gap-2 p-4; }.transcoder-metrics span { @apply text-[8px] font-bold uppercase tracking-[.08em] text-neutral-400; }.transcoder-metrics strong { @apply text-2xl font-semibold tracking-tight; }
+.transcoder-policy { @apply mb-5 overflow-hidden; }.transcoder-policy > header, .transcoder-section-title { @apply flex items-end justify-between gap-4 border-b border-neutral-100 px-5 py-4; }
+.transcoder-policy header p, .transcoder-section-title p { @apply mb-1 mt-0 text-[8px] font-bold uppercase tracking-[.12em] text-neutral-400; }.transcoder-policy h2, .transcoder-section-title h2 { @apply m-0 text-lg font-semibold; }.transcoder-policy header small, .transcoder-section-title small { @apply text-[8px] text-neutral-400; }
+.transcoder-checks { @apply flex flex-wrap gap-4 border-b border-neutral-100 bg-neutral-50 px-5 py-3; }.transcoder-checks label { @apply flex items-center gap-2 text-[9px] font-semibold text-neutral-700; }.transcoder-checks input { @apply size-3.5 accent-black; }
+.transcoder-fields { @apply grid grid-cols-4 gap-3 p-5; }.transcoder-fields label { @apply grid content-start gap-1.5; }.transcoder-fields label > span { @apply text-[8px] font-semibold text-neutral-600; }.transcoder-wide { @apply col-span-2; }
+.transcoder-policy form > footer { @apply flex items-center justify-between gap-8 border-t border-neutral-100 bg-neutral-50 px-5 py-3; }.transcoder-policy footer p { @apply m-0 max-w-2xl text-[8px] leading-4 text-neutral-500; }.transcoder-policy footer button { @apply rounded-md border-0 bg-black px-4 py-2.5 text-[9px] font-bold text-white; }
+.transcoder-section-title { @apply border-b border-neutral-100; }.transcoder-section-title + .admin-table-wrap pre { @apply m-0 max-h-24 max-w-sm overflow-auto whitespace-pre-wrap font-mono text-[7px] leading-3; }
+.transcoder-section-title ~ .admin-table-wrap pre { @apply m-0 max-h-24 max-w-sm overflow-auto whitespace-pre-wrap font-mono text-[7px] leading-3; }
+.transcoder-log-pagination { @apply flex items-center justify-between border-t border-neutral-100 px-4 py-3; }.transcoder-log-pagination a { @apply rounded-md border border-neutral-300 bg-white px-3 py-2 text-[8px] font-semibold text-neutral-700 no-underline; }.transcoder-log-pagination small { @apply text-[8px] text-neutral-400; }
+
 .admin-login-page { @apply grid min-h-screen bg-white text-neutral-950; grid-template-columns: minmax(500px,.9fr) minmax(470px,1.1fr); }
 .admin-login-panel { @apply flex min-h-screen w-full max-w-[630px] flex-col bg-white px-[clamp(34px,7vw,86px)] pb-8 pt-[clamp(28px,5vw,66px)]; }
 .admin-login-brand { @apply flex items-center gap-3; }.admin-login-brand strong { @apply text-sm font-semibold tracking-tight; }
@@ -293,6 +304,7 @@ textarea.admin-form-input { @apply resize-y; }.survey-checkbox { @apply flex min
 .version-policy-footer { @apply mx-[-1.5rem] mb-0 mt-1 rounded-none border-t border-neutral-200 bg-neutral-50 px-6 py-3; }
 
 @media (max-width: 1180px) {
+  .transcoder-metrics { @apply grid-cols-3; }.transcoder-fields { @apply grid-cols-2; }
   .metric-grid { @apply grid-cols-3; }
   .survey-grid { @apply grid-cols-2; }
   .version-policy-grid { @apply grid-cols-2; }

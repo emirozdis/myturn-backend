@@ -14,6 +14,8 @@ import { passCurrentAssignment } from "@/lib/assignment-transitions";
 import { logInfo, reportWarning } from "@/lib/observability/logger";
 import { cleanupExpiredIncidents } from "@/lib/observability/incident-store";
 import { runArchiverIteration } from "@/lib/archiver";
+import { dispatchTranscode } from "@/lib/upload-finalization";
+import { dispatchPhotoResponseTranscode } from "@/lib/photo-response-transcoding";
 
 export type CronJobResult = Record<string, number>;
 
@@ -226,7 +228,46 @@ async function runIncidentRetentionCleanup(): Promise<CronJobResult> {
   return { deletedCount };
 }
 
+export async function runTranscodeMissionRecovery(): Promise<CronJobResult> {
+  if (!process.env.TRANSCODER_SUPERVISOR_URL) return { disabled: 1 };
+  const [clips, responses] = await Promise.all([
+    db.clip.findMany({
+      where: {
+        finalizedAt: { not: null },
+        mediaType: { not: "photo" },
+        transcodeAttempts: { lt: 3 },
+        transcodeStatus: "QUEUED",
+      },
+      orderBy: { recordedAt: "asc" },
+      take: 20,
+      select: { id: true },
+    }),
+    db.photoResponse.findMany({
+      where: {
+        mediaType: { not: "photo" },
+        transcodeAttempts: { lt: 3 },
+        transcodeStatus: "QUEUED",
+      },
+      orderBy: { createdAt: "asc" },
+      take: 20,
+      select: { id: true },
+    }),
+  ]);
+  let clipsRegistered = 0;
+  let responsesRegistered = 0;
+  for (const clip of clips) {
+    try { await dispatchTranscode(clip.id); clipsRegistered += 1; }
+    catch (error) { reportWarning("transcoder.mission_recovery_failed", error, { clipId: clip.id }); }
+  }
+  for (const response of responses) {
+    try { await dispatchPhotoResponseTranscode(response.id); responsesRegistered += 1; }
+    catch (error) { reportWarning("transcoder.response_mission_recovery_failed", error, { responseId: response.id }); }
+  }
+  return { clipsRegistered, responsesRegistered, remaining: Math.max(0, clips.length + responses.length - clipsRegistered - responsesRegistered) };
+}
+
 export const cronJobs: readonly CronJobDefinition[] = [
+  { name: "transcode-mission-recovery", schedule: "* * * * *", run: runTranscodeMissionRecovery },
   { name: "frozen-group-evaluation", schedule: "0 * * * *", run: runFrozenGroupEvaluation },
   { name: "stranded-upload-cleanup", schedule: "*/30 * * * *", run: runStrandedUploadCleanup },
   { name: "group-day-transition", schedule: "*/15 * * * *", run: runGroupDayTransition },

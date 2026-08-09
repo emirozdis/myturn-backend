@@ -38,6 +38,11 @@ function readString(formData: FormData, key: string, maxLength: number, trim = t
   return (trim ? value.trim() : value).slice(0, maxLength);
 }
 
+function boundedNumber(formData: FormData, key: string, minimum: number, maximum: number, fallback: number) {
+  const value = Number(formData.get(key));
+  return Number.isFinite(value) ? Math.min(maximum, Math.max(minimum, value)) : fallback;
+}
+
 async function clientIp() {
   const requestHeaders = await headers();
   return (
@@ -675,4 +680,57 @@ export async function deleteSurvey(formData: FormData) {
   revalidatePath("/admin");
   revalidatePath("/admin/surveys");
   redirect("/admin/surveys?deleted=1");
+}
+
+export async function updateTranscoderSupervisorConfig(formData: FormData) {
+  const session = await requireAdmin();
+  const allowedGpuModels = readString(formData, "allowedGpuModels", 2_000)
+    .split(",").map((value) => value.trim()).filter(Boolean).slice(0, 50);
+  const vastTemplateHash = readString(formData, "vastTemplateHash", 256);
+  if (!vastTemplateHash) redirect("/admin/transcoder?error=template");
+
+  const data = {
+    enabled: formData.get("enabled") === "on",
+    maxHourlyPrice: boundedNumber(formData, "maxHourlyPrice", 0.01, 100, 1.5),
+    verifiedOnly: formData.get("verifiedOnly") === "on",
+    datacenterOnly: formData.get("datacenterOnly") === "on",
+    requireFullMachine: formData.get("requireFullMachine") === "on",
+    allowedGpuModels,
+    minimumGpuRamMb: Math.round(boundedNumber(formData, "minimumGpuRamMb", 1_000, 500_000, 16_000)),
+    minimumCpuCores: Math.round(boundedNumber(formData, "minimumCpuCores", 1, 512, 4)),
+    minimumRamMb: Math.round(boundedNumber(formData, "minimumRamMb", 1_000, 4_000_000, 16_000)),
+    minimumReliability: boundedNumber(formData, "minimumReliability", 0, 1, 0.98),
+    minimumDownloadMbps: boundedNumber(formData, "minimumDownloadMbps", 0, 100_000, 200),
+    minimumUploadMbps: boundedNumber(formData, "minimumUploadMbps", 0, 100_000, 100),
+    diskGb: Math.round(boundedNumber(formData, "diskGb", 10, 10_000, 20)),
+    offerSearchLimit: Math.round(boundedNumber(formData, "offerSearchLimit", 10, 500, 100)),
+    maxWorkers: Math.round(boundedNumber(formData, "maxWorkers", 1, 20, 1)),
+    jobsPerWorker: Math.round(boundedNumber(formData, "jobsPerWorker", 1, 20, 1)),
+    queueDepthPerNewWorker: Math.round(boundedNumber(formData, "queueDepthPerNewWorker", 1, 100, 1)),
+    idleTimeoutSeconds: Math.round(boundedNumber(formData, "idleTimeoutSeconds", 30, 86_400, 300)),
+    idleAction: readString(formData, "idleAction", 20) === "STOP" ? "STOP" : "DESTROY",
+    startupTimeoutSeconds: Math.round(boundedNumber(formData, "startupTimeoutSeconds", 60, 3_600, 600)),
+    healthPollSeconds: Math.round(boundedNumber(formData, "healthPollSeconds", 2, 60, 5)),
+    maxInstanceFailures: Math.round(boundedNumber(formData, "maxInstanceFailures", 1, 20, 3)),
+    maxMissionAttempts: Math.round(boundedNumber(formData, "maxMissionAttempts", 1, 10, 3)),
+    workerLogRetentionDays: Math.round(boundedNumber(formData, "workerLogRetentionDays", 0, 3650, 30)),
+    vastTemplateHash,
+  };
+
+  const previous = await db.transcoderSupervisorConfig.findUnique({ where: { id: "default" } });
+  await db.transcoderSupervisorConfig.upsert({
+    where: { id: "default" },
+    create: { id: "default", ...data },
+    update: { ...data, policyVersion: { increment: 1 } },
+  });
+  await writeAdminAudit({
+    actorEmail: session.email,
+    action: "transcoder.policy_updated",
+    targetType: "transcoder_supervisor_config",
+    targetId: "default",
+    details: { previousPolicyVersion: previous?.policyVersion ?? null, fullMachine: data.requireFullMachine, maxWorkers: data.maxWorkers },
+    ipAddress: await clientIp(),
+  });
+  revalidatePath("/admin/transcoder");
+  redirect("/admin/transcoder?updated=1");
 }

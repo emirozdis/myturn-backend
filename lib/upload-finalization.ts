@@ -6,7 +6,7 @@ import { calculateGroupLevel, getVibeArchetype } from "@/lib/vibe";
 import { startTranscodeJob } from "@/lib/transcoder";
 import { sendPushToUser } from "@/lib/push-server";
 import { getBusinessClock } from "@/lib/business-time";
-import { reportError } from "@/lib/observability/logger";
+import { reportError, reportWarning } from "@/lib/observability/logger";
 import { parseRecordingMetadata, type RecordingComposition } from "@/lib/recording-composition";
 
 const MAX_VIDEO_BYTES = 250 * 1024 * 1024;
@@ -59,13 +59,14 @@ async function inSerializableTransaction<T>(work: (tx: Prisma.TransactionClient)
   throw new Error("Transaction retry limit exceeded.");
 }
 
-async function dispatchTranscode(clipId: string) {
+export async function dispatchTranscode(clipId: string) {
   let clip = await db.clip.findUnique({ where: { id: clipId } });
   if (!clip || clip.mediaType === "photo" || clip.transcodeStatus === "COMPLETED" || clip.transcodeReadyAt) return;
   if (clip.transcodeJobId && clip.transcodeJobId !== clip.id) return;
   if (clip.transcodeJobId && clip.transcodeStatus === "PROCESSING") return;
 
-  const staleDispatch = new Date(Date.now() - 5 * 60_000);
+  const staleMinutes = Math.max(5, Number(process.env.TRANSCODER_DISPATCH_STALE_MINUTES) || 45);
+  const staleDispatch = new Date(Date.now() - staleMinutes * 60_000);
   const claimed = await db.clip.updateMany({
     where: {
       id: clipId,
@@ -129,9 +130,11 @@ async function dispatchTranscode(clipId: string) {
   } catch (error) {
     await db.clip.updateMany({
       where: { id: clip.id, transcodeStatus: "DISPATCHING", transcodeJobId: clip.id },
-      data: { transcodeStatus: "FAILED" },
+      // Supervisor availability is infrastructure state, not a media failure.
+      // Preserve the durable source and let the recovery sweep register it.
+      data: { transcodeStatus: "QUEUED" },
     });
-    throw new Error("Video encoding initiation failed.", { cause: error });
+    throw new Error("Transcode mission registration failed.", { cause: error });
   }
 }
 
@@ -229,7 +232,15 @@ export async function finalizeUploadedClip(
       return { claimed: true, newlyUnlocked, groupLevelUp, individualTierUp };
     });
 
-    if (!isPhoto) await dispatchTranscode(clip.id);
+    if (!isPhoto) {
+      try {
+        // The supervisor only persists and acknowledges the mission here. Vast
+        // provisioning and transcoding continue asynchronously after response.
+        await dispatchTranscode(clip.id);
+      } catch (error) {
+        reportWarning("transcoder.supervisor_registration_deferred", error, { clipId: clip.id }, "Upload finalized; supervisor registration will retry");
+      }
+    }
 
     if (isPhoto && reward.claimed) {
       const [poster, members] = await Promise.all([

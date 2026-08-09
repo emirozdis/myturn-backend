@@ -75,14 +75,14 @@ export async function dispatchPhotoResponseTranscode(responseId: string): Promis
     if (needsPosterBackfill) {
       await db.photoResponse.updateMany({
         where: { id: response.id, transcodeStatus: "COMPLETED", transcodeJobId: response.id },
-        data: { transcodeAttempts: { increment: 1 } },
+        data: { transcodeDispatchAt: null },
       });
     } else {
       await db.photoResponse.updateMany({
         where: { id: response.id, transcodeStatus: "DISPATCHING", transcodeJobId: response.id },
-        data: { transcodeStatus: "FAILED", transcodeAttempts: { increment: 1 } },
+        data: { transcodeStatus: "QUEUED" },
       });
     }
-    throw new Error("Video response encoding initiation failed.", { cause: error });
+    throw new Error("Video response supervisor registration failed.", { cause: error });
   }
 }

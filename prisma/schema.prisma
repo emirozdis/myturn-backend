@@ -655,6 +655,144 @@ model TranscoderWebhookEvent {
   @@map("transcoder_webhook_events")
 }
 
+/// Singleton policy read by the external Vast supervisor. Secrets remain in
+/// service environment variables; this row contains only operational policy.
+model TranscoderSupervisorConfig {
+  id                     String   @id @default("default")
+  enabled                Boolean  @default(true)
+  maxHourlyPrice         Decimal  @default(1.5) @db.Decimal(10, 4)
+  verifiedOnly           Boolean  @default(true)
+  datacenterOnly         Boolean  @default(true)
+  requireFullMachine     Boolean  @default(false)
+  allowedGpuModels       String[] @default([])
+  minimumGpuRamMb        Int      @default(16000)
+  minimumCpuCores        Int      @default(4)
+  minimumRamMb           Int      @default(16000)
+  minimumReliability     Float    @default(0.98)
+  minimumDownloadMbps    Float    @default(200)
+  minimumUploadMbps      Float    @default(100)
+  diskGb                 Int      @default(20)
+  offerSearchLimit       Int      @default(100)
+  maxWorkers             Int      @default(1)
+  jobsPerWorker          Int      @default(1)
+  queueDepthPerNewWorker Int      @default(1)
+  idleTimeoutSeconds     Int      @default(300)
+  idleAction             String   @default("DESTROY")
+  startupTimeoutSeconds  Int      @default(600)
+  healthPollSeconds      Int      @default(5)
+  maxInstanceFailures    Int      @default(3)
+  maxMissionAttempts     Int      @default(3)
+  workerLogRetentionDays Int      @default(30)
+  vastTemplateHash       String
+  policyVersion          Int      @default(1)
+  updatedAt              DateTime @updatedAt @db.Timestamptz(3)
+  createdAt              DateTime @default(now()) @db.Timestamptz(3)
+
+  @@map("transcoder_supervisor_config")
+}
+
+model TranscoderMission {
+  id                 String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  externalId         String    @unique
+  entityType         String
+  payload            Json
+  status             String    @default("QUEUED")
+  priority           Int       @default(0)
+  attempts           Int       @default(0)
+  availableAt        DateTime  @default(now()) @db.Timestamptz(3)
+  assignedInstanceId String?   @db.Uuid
+  lastErrorCode      String?
+  lastErrorMessage   String?   @db.Text
+  registeredAt       DateTime  @default(now()) @db.Timestamptz(3)
+  dispatchedAt       DateTime? @db.Timestamptz(3)
+  completedAt        DateTime? @db.Timestamptz(3)
+  updatedAt          DateTime  @updatedAt @db.Timestamptz(3)
+
+  assignedInstance TranscoderInstance?         @relation(fields: [assignedInstanceId], references: [id], onDelete: SetNull)
+  events           TranscoderSupervisorEvent[]
+
+  @@index([status, availableAt, priority, registeredAt])
+  @@index([assignedInstanceId, status])
+  @@map("transcoder_missions")
+}
+
+model TranscoderInstance {
+  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  vastInstanceId      Int       @unique
+  offerId             Int?
+  machineId           Int?
+  state               String
+  workerUrl           String?
+  gpuName             String?
+  hourlyPrice         Decimal?  @db.Decimal(10, 4)
+  fullMachine         Boolean   @default(false)
+  classification      Json?
+  healthStatus        String    @default("UNKNOWN")
+  consecutiveFailures Int       @default(0)
+  successfulJobs      Int       @default(0)
+  failedJobs          Int       @default(0)
+  lastHeartbeatAt     DateTime? @db.Timestamptz(3)
+  idleSince           DateTime? @db.Timestamptz(3)
+  startedAt           DateTime? @db.Timestamptz(3)
+  terminatedAt        DateTime? @db.Timestamptz(3)
+  lastError           String?   @db.Text
+  rawState            Json?
+  createdAt           DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime  @updatedAt @db.Timestamptz(3)
+
+  missions   TranscoderMission[]
+  events     TranscoderSupervisorEvent[]
+  workerLogs TranscoderWorkerLog[]
+
+  @@index([state, healthStatus, updatedAt])
+  @@map("transcoder_instances")
+}
+
+/// Durable structured logs shipped from ephemeral Vast workers. The event ID
+/// is generated at the worker so batch retries remain idempotent.
+model TranscoderWorkerLog {
+  id             String   @id @db.Uuid
+  instanceId     String?  @db.Uuid
+  vastInstanceId Int?
+  instanceLabel  String?
+  jobId          String?
+  level          String
+  message        String   @db.Text
+  service        String
+  correlationId  String?
+  context        Json?
+  occurredAt     DateTime @db.Timestamptz(3)
+  receivedAt     DateTime @default(now()) @db.Timestamptz(3)
+
+  instance TranscoderInstance? @relation(fields: [instanceId], references: [id], onDelete: SetNull)
+
+  @@index([occurredAt])
+  @@index([level, occurredAt])
+  @@index([jobId, occurredAt])
+  @@index([vastInstanceId, occurredAt])
+  @@map("transcoder_worker_logs")
+}
+
+model TranscoderSupervisorEvent {
+  id         BigInt   @id @default(autoincrement())
+  severity   String
+  code       String
+  message    String
+  missionId  String?  @db.Uuid
+  instanceId String?  @db.Uuid
+  context    Json?
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+
+  mission  TranscoderMission?  @relation(fields: [missionId], references: [id], onDelete: SetNull)
+  instance TranscoderInstance? @relation(fields: [instanceId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([severity, createdAt])
+  @@index([missionId, createdAt])
+  @@index([instanceId, createdAt])
+  @@map("transcoder_supervisor_events")
+}
+
 model MediaUploadGrant {
   id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   path        String    @unique

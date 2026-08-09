@@ -5,11 +5,12 @@ import { execFile } from "child_process";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
-import { randomUUID } from "crypto";
+import { createHmac, randomUUID } from "crypto";
 import { logInfo, reportError, reportWarning } from "@/lib/observability/logger";
 import type { RecordingComposition } from "@/lib/recording-composition";
 
-const TRANSCODER_API_KEY = process.env.TRANSCODER_API_KEY || "";
+const SUPERVISOR_URL = process.env.TRANSCODER_SUPERVISOR_URL || "";
+const SUPERVISOR_SECRET = process.env.SUPERVISOR_MISSION_SECRET || "";
 const NEXT_PUBLIC_APP_URL = process.env.NEXT_PUBLIC_APP_URL || process.env.APP_BASE_URL || "https://myturn.app";
 const R2_BUCKET_NAME = process.env.CLOUDFLARE_R2_BUCKET_NAME || "vlogs";
 const IS_SINGLE_BUCKET = !!process.env.CLOUDFLARE_R2_BUCKET_NAME;
@@ -25,29 +26,6 @@ function getPhysicalKey(key: string): string {
   }
   return key;
 }
-
-/**
- * Defensive URL Resolver
- */
-const getTranscoderUrl = (): string => {
-  const envUrl = process.env.TRANSCODER_API_URL;
-  const defaultPath = "/api/v1/videos/process-remote";
-  const defaultFallback = `http://localhost:3002${defaultPath}`;
-
-  if (!envUrl) {
-    return defaultFallback;
-  }
-
-  const cleanUrl = envUrl.trim();
-  if (!cleanUrl.endsWith(defaultPath) && !cleanUrl.endsWith(`${defaultPath}/`)) {
-    const cleanBase = cleanUrl.endsWith("/") ? cleanUrl.slice(0, -1) : cleanUrl;
-    return `${cleanBase}${defaultPath}`;
-  }
-
-  return cleanUrl;
-};
-
-const TRANSCODER_API_URL = getTranscoderUrl();
 
 export function runFfmpeg(args: string[], timeoutMs: number): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -93,8 +71,8 @@ export async function startTranscodeJob(
   composition?: RecordingComposition,
   callbackPayload?: Record<string, string>,
 ): Promise<string> {
-  if (!TRANSCODER_API_KEY) {
-    throw new Error("Missing TRANSCODER_API_KEY in environment variables.");
+  if (!SUPERVISOR_URL || !SUPERVISOR_SECRET || SUPERVISOR_SECRET.length < 32) {
+    throw new Error("Transcoder supervisor mission delivery is not configured.");
   }
 
   logInfo("transcoder.dispatch_started", { clipId }, "Transcode dispatch started");
@@ -120,34 +98,47 @@ export async function startTranscodeJob(
     }
   };
 
-  const res = await fetch(TRANSCODER_API_URL, {
+  const missionBody = JSON.stringify({
+    externalId: clipId,
+    entityType: callbackPayload?.photoResponseId ? "photoResponse" : "clip",
+    priority: 0,
+    payload,
+  });
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const requestId = randomUUID();
+  const signature = createHmac("sha256", SUPERVISOR_SECRET)
+    .update(`${timestamp}.${requestId}.${missionBody}`)
+    .digest("hex");
+  const endpoint = new URL("/v1/missions", SUPERVISOR_URL).toString();
+  const res = await fetch(endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-api-key": TRANSCODER_API_KEY,
+      "x-supervisor-request-id": requestId,
+      "x-supervisor-timestamp": timestamp,
+      "x-supervisor-signature": `sha256=${signature}`,
     },
-    body: JSON.stringify(payload),
+    body: missionBody,
     signal: AbortSignal.timeout(10_000),
   });
-
+  const responseText = await res.text();
   if (!res.ok) {
-    const errorText = (await res.text()).slice(0, 1_000);
-    throw new Error(`Transcoder request failed with HTTP ${res.status}: ${errorText}`);
+    throw new Error(`Supervisor mission registration failed with HTTP ${res.status}: ${responseText.slice(0, 1_000)}`);
   }
-
-  const responseData = await res.json();
-  
-  if (responseData.status !== "success" || !responseData.data?.jobId) {
-    throw new Error("Transcoder returned an invalid response layout");
+  let responseData: { status?: string; mission?: { externalId?: string } };
+  try { responseData = JSON.parse(responseText) as typeof responseData; }
+  catch { throw new Error("Supervisor returned invalid JSON"); }
+  if (responseData.status !== "accepted" || responseData.mission?.externalId !== clipId) {
+    throw new Error("Supervisor returned an invalid or mismatched mission acknowledgement");
   }
 
   logInfo(
     "transcoder.dispatch_completed",
-    { clipId, transcodeJobId: responseData.data.jobId },
-    "Transcode job queued",
+    { clipId, transcodeJobId: clipId, supervisorRequestId: requestId },
+    "Transcode mission durably registered with the Vast supervisor",
   );
   
-  return responseData.data.jobId as string;
+  return clipId;
 }
 
 export async function generateMissingThumbnails(
