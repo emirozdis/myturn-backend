@@ -10,9 +10,11 @@ import {
   isRecentAuthentication,
 } from "../../lib/auth-policy";
 
-test("App Check exemptions are narrow and include both cron routes", () => {
-  assert.equal(isAppCheckExempt("POST", "/api/cron"), true);
-  assert.equal(isAppCheckExempt("GET", "/api/cron/incidents"), true);
+test("App Check exemptions are narrow and include only the consolidated cron tick", () => {
+  assert.equal(isAppCheckExempt("POST", "/api/cron/tick"), true);
+  assert.equal(isAppCheckExempt("GET", "/api/cron/tick"), false);
+  assert.equal(isAppCheckExempt("POST", "/api/cron"), false);
+  assert.equal(isAppCheckExempt("GET", "/api/cron/incidents"), false);
   assert.equal(isAppCheckExempt("GET", "/api/legal/privacy"), true);
   assert.equal(isAppCheckExempt("POST", "/api/profile"), false);
   assert.equal(isAppCheckExempt("GET", "/api/profile"), false);

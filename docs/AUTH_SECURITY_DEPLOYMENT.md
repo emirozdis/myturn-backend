@@ -20,7 +20,6 @@ PostgreSQL table rename. Do not deploy it as an uncoordinated code-only change.
    - `AUTH_STATE_SECRET` (at least 32 random bytes)
    - `AUTH_CODE_SECRET` (a separate value of at least 32 random bytes)
    - `CRON_SECRET`
-   - `CRON_API_KEY`
 6. Expect all outstanding verification, reset, and deletion codes to become
    invalid because code hashes are now purpose/account-bound HMACs.
 
@@ -55,7 +54,7 @@ PostgreSQL table rename. Do not deploy it as an uncoordinated code-only change.
    - password reset and revocation of an older session;
    - new and existing Google login;
    - account deletion followed by attempted token reuse;
-   - cron incident cleanup;
+   - consolidated cron tick authentication and incident cleanup;
    - missing, invalid, valid, and replayed App Check tokens.
 
 ## Post-deployment monitoring
@@ -63,7 +62,8 @@ PostgreSQL table rename. Do not deploy it as an uncoordinated code-only change.
 - Monitor Firebase Auth and App Check rejection metrics.
 - Alert on `NO_APPCHECK_TOKEN`, `INVALID_APPCHECK_TOKEN`, failed custom-token
   minting, UID/email conflicts, and rate-limit persistence failures.
-- Confirm `/api/cron/incidents` runs on its next schedule.
+- Confirm the externally triggered `POST /api/cron/tick` runs and persists its
+  job results; incident cleanup is selected at its next daily schedule.
 - Check for profiles with no corresponding Firebase identity; do not
   auto-provision them from request middleware.
 - Remove any temporary maintenance compatibility measures after all instances

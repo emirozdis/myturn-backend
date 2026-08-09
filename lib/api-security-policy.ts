@@ -9,7 +9,7 @@ export function requiresLimitedUseAppCheck(method: string, pathname: string) {
 }
 
 export function isAppCheckExempt(method: string, pathname: string) {
-  if (pathname === "/api/cron" || pathname === "/api/cron/incidents") return true;
+  if (pathname === "/api/cron/tick" && method.toUpperCase() === "POST") return true;
   if (pathname === "/api/legal/privacy") return true;
   if (pathname === "/api/account-deletion/request") return true;
   if (pathname === "/api/profile" && method.toUpperCase() === "DELETE") return true;

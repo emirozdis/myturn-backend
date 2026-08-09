@@ -230,13 +230,20 @@ async function runIncidentRetentionCleanup(): Promise<CronJobResult> {
 
 export async function runTranscodeMissionRecovery(): Promise<CronJobResult> {
   if (!process.env.TRANSCODER_SUPERVISOR_URL) return { disabled: 1 };
+  const clipStaleMinutes = Math.max(5, Number(process.env.TRANSCODER_DISPATCH_STALE_MINUTES) || 45);
+  const staleClipDispatch = new Date(Date.now() - clipStaleMinutes * 60_000);
+  const staleResponseDispatch = new Date(Date.now() - 5 * 60_000);
+  const staleResponseProcessing = new Date(Date.now() - 30 * 60_000);
   const [clips, responses] = await Promise.all([
     db.clip.findMany({
       where: {
         finalizedAt: { not: null },
         mediaType: { not: "photo" },
         transcodeAttempts: { lt: 3 },
-        transcodeStatus: "QUEUED",
+        OR: [
+          { transcodeStatus: { in: ["QUEUED", "FAILED"] } },
+          { transcodeStatus: "DISPATCHING", transcodeDispatchAt: { lt: staleClipDispatch } },
+        ],
       },
       orderBy: { recordedAt: "asc" },
       take: 20,
@@ -246,7 +253,16 @@ export async function runTranscodeMissionRecovery(): Promise<CronJobResult> {
       where: {
         mediaType: { not: "photo" },
         transcodeAttempts: { lt: 3 },
-        transcodeStatus: "QUEUED",
+        OR: [
+          { transcodeStatus: { in: ["QUEUED", "FAILED"] } },
+          { transcodeStatus: "DISPATCHING", transcodeDispatchAt: { lt: staleResponseDispatch } },
+          { transcodeStatus: "PROCESSING", transcodeDispatchAt: { lt: staleResponseProcessing } },
+          {
+            transcodeStatus: "COMPLETED",
+            hlsUrl: { not: null },
+            OR: [{ thumbnailUrl: null }, { thumbnailBlurUrl: null }],
+          },
+        ],
       },
       orderBy: { createdAt: "asc" },
       take: 20,
@@ -266,6 +282,15 @@ export async function runTranscodeMissionRecovery(): Promise<CronJobResult> {
   return { clipsRegistered, responsesRegistered, remaining: Math.max(0, clips.length + responses.length - clipsRegistered - responsesRegistered) };
 }
 
+async function runCronHistoryCleanup(): Promise<CronJobResult> {
+  const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1_000);
+  const deleted = await db.cronJobRun.deleteMany({
+    where: { createdAt: { lt: cutoff }, status: { not: "RUNNING" } },
+  });
+  logInfo("cron.history_cleanup_completed", { deletedCount: deleted.count, cutoff }, "Expired cron run history deleted");
+  return { deletedCount: deleted.count };
+}
+
 export const cronJobs: readonly CronJobDefinition[] = [
   { name: "transcode-mission-recovery", schedule: "* * * * *", run: runTranscodeMissionRecovery },
   { name: "frozen-group-evaluation", schedule: "0 * * * *", run: runFrozenGroupEvaluation },
@@ -274,15 +299,10 @@ export const cronJobs: readonly CronJobDefinition[] = [
   { name: "daily-assignment-roll", schedule: "0 * * * *", run: runDailyAssignmentRoll },
   { name: "vlogger-reminders", schedule: "*/30 * * * *", run: runVloggerReminders },
   { name: "incident-retention-cleanup", schedule: "17 3 * * *", run: runIncidentRetentionCleanup },
-];
-
-// The archiver uses setInterval on a long-lived server, but must be explicitly
-// invoked alongside cron jobs when deployed to an ephemeral serverless runtime.
-export const serverlessCronJobs: readonly CronJobDefinition[] = [
-  ...cronJobs,
   {
     name: "archive-worker-iteration",
     schedule: "*/15 * * * *",
     run: () => runArchiverIteration(10),
   },
+  { name: "cron-history-cleanup", schedule: "27 3 * * *", run: runCronHistoryCleanup },
 ];

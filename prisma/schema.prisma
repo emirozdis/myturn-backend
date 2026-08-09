@@ -994,3 +994,47 @@ model AdminAuditLog {
   @@index([targetType, targetId, createdAt])
   @@map("admin_audit_logs")
 }
+
+model CronJobState {
+  name                String    @id
+  schedule            String
+  nextRunAt           DateTime  @db.Timestamptz(3)
+  leaseOwner          String?
+  leaseExpiresAt      DateTime? @db.Timestamptz(3)
+  lastStartedAt       DateTime? @db.Timestamptz(3)
+  lastCompletedAt     DateTime? @db.Timestamptz(3)
+  lastSucceededAt     DateTime? @db.Timestamptz(3)
+  lastFailedAt        DateTime? @db.Timestamptz(3)
+  consecutiveFailures Int       @default(0)
+  lastResult          Json?
+  lastError           Json?
+  createdAt           DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime  @default(now()) @updatedAt @db.Timestamptz(3)
+
+  runs CronJobRun[]
+
+  @@index([nextRunAt, leaseExpiresAt])
+  @@map("cron_job_states")
+}
+
+model CronJobRun {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  jobName      String
+  tickId       String    @db.Uuid
+  scheduledFor DateTime  @db.Timestamptz(3)
+  attempt      Int
+  status       String
+  startedAt    DateTime  @db.Timestamptz(3)
+  completedAt  DateTime? @db.Timestamptz(3)
+  durationMs   Int?
+  result       Json?
+  error        Json?
+  createdAt    DateTime  @default(now()) @db.Timestamptz(3)
+
+  job CronJobState @relation(fields: [jobName], references: [name], onDelete: Cascade)
+
+  @@index([jobName, startedAt])
+  @@index([status, startedAt])
+  @@index([tickId])
+  @@map("cron_job_runs")
+}
