@@ -80,7 +80,7 @@ export function TranscoderPolicyDialog({ policy }: { policy: TranscoderPolicyVal
                     <legend><Cpu aria-hidden="true" /><span>Template and hardware</span></legend>
                     <div className="transcoder-fields">
                       <label className="transcoder-wide"><span>Vast template hash</span><input className="admin-form-input" name="vastTemplateHash" defaultValue={policy.vastTemplateHash} required /><small>Hash ID for the private myturn-transcoder template</small></label>
-                      <label className="transcoder-wide"><span>Allowed GPU models</span><input className="admin-form-input" name="allowedGpuModels" defaultValue={policy.allowedGpuModels.join(", ")} placeholder="Blank allows any model" /><small>Comma separated; names must match Vast exactly</small></label>
+                      <label className="transcoder-wide"><span>Allowed GPU models</span><input className="admin-form-input" name="allowedGpuModels" defaultValue={policy.allowedGpuModels.join(", ")} placeholder="Blank allows any model" /><small>Comma separated; names must match Vast exactly. The cheapest qualifying offer is selected.</small></label>
                       <NumberField label="Minimum GPU RAM" name="minimumGpuRamMb" value={policy.minimumGpuRamMb} hint="MB per GPU" />
                       <NumberField label="Minimum CPU cores" name="minimumCpuCores" value={policy.minimumCpuCores} />
                       <NumberField label="Minimum system RAM" name="minimumRamMb" value={policy.minimumRamMb} hint="MB allocated" />

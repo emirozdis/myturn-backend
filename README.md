@@ -1,8 +1,8 @@
 # MyTurn Backend
 
-This directory contains the backend used by the `myturn-app` Expo application.
-It is a Next.js API service; it does not contain the Expo client or a web/PWA
-frontend.
+This repository contains the Next.js backend used by the `myturn-app` Expo application, along with the admin dashboard and public legal/support pages. The mobile client is maintained separately in [myturn-app](https://github.com/emirozdis/myturn-app).
+
+It is linked into the private [MyTurn parent repository](https://github.com/emirozdis/myturn) as `myturn/`. Commit and push backend changes here, then update the parent's `myturn` submodule reference.
 
 ## Responsibilities
 
@@ -18,8 +18,8 @@ frontend.
 ## Local development
 
 1. Copy `.env.example` to `.env` and fill in the backend credentials.
-2. Install dependencies with `npm install`.
-3. Generate Prisma Client with `npm run postinstall`.
+2. Install locked dependencies with `npm ci` (this also generates Prisma Client).
+3. Regenerate Prisma Client with `npm run postinstall` after schema changes, if needed.
 4. Apply the Prisma migrations with `npm run db:migrate:deploy`.
 5. Start the API with `npm run dev`.
 
@@ -27,7 +27,17 @@ The Expo application should point its API base URL at this service. Static app
 assets, screens, UI components, and client SDK initialization belong in
 `../myturn-app`, not in this directory.
 
-See `BACKEND_CLEANUP.md` for the backend-only audit and removed items.
+Run `npm test` for the configured observability and survey tests, `npm run lint` for linting, and `npm run build` for a production build. The backend normally runs on port 3000.
+
+## Related services and documentation
+
+- [Admin dashboard](docs/ADMIN_DASHBOARD.md)
+- [External scheduler](docs/EXTERNAL_CRON_SCHEDULER.md), triggered by [myturn-cron-worker](https://github.com/emirozdis/myturn-cron-worker)
+- [Media delivery Worker](cloudflare-worker/README.md), maintained inside this repository
+- [Transcoder supervisor](https://github.com/emirozdis/myturn-supervisor)
+- [FFmpeg worker](https://github.com/emirozdis/ffmpeg-api)
+
+Configure the hosting environment using `.env.example`; never commit the filled environment files or database backups.
 
 ## Database deployment
 
